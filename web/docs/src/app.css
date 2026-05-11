@@ -260,6 +260,28 @@ body {
   display: inline-flex;
 }
 
+.docs-tree-filter-wrap {
+  flex: 0 0 auto;
+  padding: 0.35rem 0.5rem 0;
+}
+
+.docs-tree-filter {
+  width: 100%;
+  padding: 0.3rem 0.5rem;
+  font: inherit;
+  font-size: 0.85rem;
+  border: 1px solid var(--docs-border);
+  border-radius: 0.3rem;
+  background: var(--docs-surface);
+  color: var(--docs-text);
+  outline: none;
+}
+
+.docs-tree-filter:focus {
+  border-color: var(--docs-link);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--docs-link) 25%, transparent);
+}
+
 .docs-tree-wrap {
   flex: 1;
   min-height: 0;

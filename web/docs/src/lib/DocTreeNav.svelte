@@ -13,6 +13,7 @@
     outlineSessionEpoch?: number;
     /** POSIX path segments for this level’s parent (e.g. `guides/admin`). */
     parentDirPath?: string;
+    forceExpandAll?: boolean;
   }
 
   let {
@@ -20,6 +21,7 @@
     activeRouteKey,
     outlineSessionEpoch = 0,
     parentDirPath = "",
+    forceExpandAll = false,
   }: Props = $props();
 
   /** Bumps when a folder is toggled so `isExpanded` re-reads sessionStorage. */
@@ -57,7 +59,7 @@
     <li class="doc-tree-item">
       {#if node.type === "dir"}
         {@const dirPath = parentDirPath ? `${parentDirPath}/${node.name}` : node.name}
-        {@const expanded = isExpanded(dirPath)}
+        {@const expanded = forceExpandAll || isExpanded(dirPath)}
         {@const subId = childListId(dirPath)}
         <div class="doc-tree-folder" data-doc-tree-dir={dirPath}>
           <button
@@ -109,6 +111,7 @@
                 {activeRouteKey}
                 {outlineSessionEpoch}
                 parentDirPath={dirPath}
+                {forceExpandAll}
               />
             </div>
           {/if}

@@ -14,6 +14,7 @@
   import { bfsFirstRouteKeyUnderDir } from "./lib/manifestBfsDefault";
   import { persistExpandedPathForRouteKey } from "./lib/treeSession";
   import { DocTreeNav } from "./lib/tree";
+  import { filterTree } from "./lib/filterTree";
 
   const NAV_COLLAPSED_KEY = "fullsend-docs-nav-collapsed";
   const WIDTH_STORAGE_KEY = "fullsend-docs-sidebar-width-px";
@@ -34,6 +35,8 @@
   let narrowViewport = $state(false);
   /** Bumps when outline session keys change outside the tree (e.g. directory hash); keeps DocTreeNav in sync with sessionStorage. */
   let outlineSessionEpoch = $state(0);
+  let filterQuery = $state("");
+  let filteredManifest = $derived(filterTree(manifest, filterQuery));
 
   let outlineExpanded = $derived(
     narrowViewport ? mobileNavOpen : !navCollapsed,
@@ -422,11 +425,21 @@
           </svg>
         </button>
       </div>
+      <div class="docs-tree-filter-wrap">
+        <input
+          class="docs-tree-filter"
+          type="search"
+          placeholder="Filter docs…"
+          aria-label="Filter documents"
+          bind:value={filterQuery}
+        />
+      </div>
       <nav class="docs-tree-wrap">
         <DocTreeNav
-          nodes={manifest}
+          nodes={filteredManifest}
           activeRouteKey={pageRouteKey}
           outlineSessionEpoch={outlineSessionEpoch}
+          forceExpandAll={filterQuery.trim().length > 0}
         />
       </nav>
     </aside>
