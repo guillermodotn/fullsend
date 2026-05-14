@@ -206,22 +206,22 @@ func Create(name string, providers []string, image, policy string) error {
 	supervisorLogs, _ := CollectLogs(name, "supervisor")
 	gatewayLogs, _ := CollectLogs(name, "gateway")
 
-	var dockerLogs string
-	listCmd := exec.Command("docker", "ps", "-a", "--filter", "name=openshell-"+name, "--format", "{{.Names}}")
+	var containerLogs string
+	listCmd := exec.Command("podman", "ps", "-a", "--filter", "name=openshell-"+name, "--format", "{{.Names}}")
 	if listOut, err := listCmd.Output(); err == nil {
 		for _, cname := range strings.Split(strings.TrimSpace(string(listOut)), "\n") {
 			if cname == "" {
 				continue
 			}
-			logCmd := exec.Command("docker", "logs", cname)
+			logCmd := exec.Command("podman", "logs", cname)
 			if logOut, logErr := logCmd.CombinedOutput(); logErr == nil {
-				dockerLogs += fmt.Sprintf("=== %s ===\n%s\n", cname, string(logOut))
+				containerLogs += fmt.Sprintf("=== %s ===\n%s\n", cname, string(logOut))
 			}
 		}
 	}
 
-	return fmt.Errorf("sandbox %q not ready after %s\nstdout: %s\nstderr: %s\nsupervisor logs: %s\ngateway logs: %s\ndocker logs: %s",
-		name, readyTimeout, lastOutput, lastStderr, supervisorLogs, gatewayLogs, dockerLogs)
+	return fmt.Errorf("sandbox %q not ready after %s\nstdout: %s\nstderr: %s\nsupervisor logs: %s\ngateway logs: %s\ncontainer logs: %s",
+		name, readyTimeout, lastOutput, lastStderr, supervisorLogs, gatewayLogs, containerLogs)
 }
 
 // Delete deletes a sandbox, returning any error for the caller to log.
