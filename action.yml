@@ -161,6 +161,9 @@ runs:
       run: |
         set -euo pipefail
 
+        GATEWAY_LOG="${GITHUB_WORKSPACE}/output/openshell-gateway.log"
+        mkdir -p "${GITHUB_WORKSPACE}/output"
+
         "${RUNNER_TEMP}/fullsend/openshell-gateway" \
           --bind-address 0.0.0.0 \
           --port 8080 \
@@ -172,7 +175,7 @@ runs:
           --db-url "sqlite:/tmp/gateway.db?mode=rwc" \
           --sandbox-image-pull-policy IfNotPresent \
           --docker-supervisor-image "ghcr.io/nvidia/openshell/supervisor:latest" \
-          --log-level info &
+          --log-level info >"${GATEWAY_LOG}" 2>&1 &
 
         for i in $(seq 1 30); do
           curl -sf http://127.0.0.1:8081/healthz >/dev/null 2>&1 && break

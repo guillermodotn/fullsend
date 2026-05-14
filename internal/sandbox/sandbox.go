@@ -18,8 +18,8 @@ const (
 	// SandboxClaudeConfig is the Claude config directory inside the sandbox.
 	SandboxClaudeConfig = "/tmp/claude-config" //nolint:gosec // not a credential
 
-	createTimeout   = 65 * time.Second
-	readyTimeout    = 60 * time.Second
+	createTimeout   = 125 * time.Second
+	readyTimeout    = 120 * time.Second
 	readyPoll       = 2 * time.Second
 	transferTimeout = 5 * time.Minute
 )
@@ -187,16 +187,41 @@ func Create(name string, providers []string, image, policy string) error {
 
 	// Wait for sandbox to be fully ready (image pull can take a while).
 	deadline := time.Now().Add(readyTimeout)
+	var lastOutput, lastStderr string
 	for time.Now().Before(deadline) {
 		check := exec.Command("openshell", "sandbox", "get", name)
-		output, checkErr := check.Output()
-		if checkErr == nil && strings.Contains(string(output), "Ready") {
+		var stdoutBuf, stderrBuf strings.Builder
+		check.Stdout = &stdoutBuf
+		check.Stderr = &stderrBuf
+		checkErr := check.Run()
+		lastOutput = stdoutBuf.String()
+		lastStderr = stderrBuf.String()
+		if checkErr == nil && strings.Contains(lastOutput, "Ready") {
 			return nil
 		}
 		time.Sleep(readyPoll)
 	}
 
-	return fmt.Errorf("sandbox %q not ready after %s", name, readyTimeout)
+	// Collect sandbox logs to help diagnose the failure.
+	supervisorLogs, _ := CollectLogs(name, "supervisor")
+	gatewayLogs, _ := CollectLogs(name, "gateway")
+
+	var dockerLogs string
+	listCmd := exec.Command("docker", "ps", "-a", "--filter", "name=openshell-"+name, "--format", "{{.Names}}")
+	if listOut, err := listCmd.Output(); err == nil {
+		for _, cname := range strings.Split(strings.TrimSpace(string(listOut)), "\n") {
+			if cname == "" {
+				continue
+			}
+			logCmd := exec.Command("docker", "logs", cname)
+			if logOut, logErr := logCmd.CombinedOutput(); logErr == nil {
+				dockerLogs += fmt.Sprintf("=== %s ===\n%s\n", cname, string(logOut))
+			}
+		}
+	}
+
+	return fmt.Errorf("sandbox %q not ready after %s\nstdout: %s\nstderr: %s\nsupervisor logs: %s\ngateway logs: %s\ndocker logs: %s",
+		name, readyTimeout, lastOutput, lastStderr, supervisorLogs, gatewayLogs, dockerLogs)
 }
 
 // Delete deletes a sandbox, returning any error for the caller to log.
