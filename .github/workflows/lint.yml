@@ -27,8 +27,8 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v7.6.0
 
-      - name: Install pre-commit
-        run: uv pip install --system pre-commit
+      - name: Install pre-commit and test dependencies
+        run: uv pip install --system pre-commit jsonschema
 
       - name: Install lychee
         run: |
