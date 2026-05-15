@@ -254,7 +254,7 @@ jobs:
           fi
 
       - name: Block fork PRs for fix stage
-        if: steps.route.outputs.stage == 'fix' && github.event.issue.pull_request
+        if: steps.route.outputs.stage == 'fix' && steps.role-check.outputs.skipped != 'true' && github.event.issue.pull_request
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_REPO: ${{ github.repository }}
