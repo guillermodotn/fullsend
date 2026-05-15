@@ -75,6 +75,13 @@ for yaml_file in "$HARNESS_DIR"/*.yaml; do
     fi
     doc_basename="$(basename "$doc_value")"
 
+    # Check that the top-level heading ends with " Agent"
+    h1="$(awk 'BEGIN{f=0} /^```/{f=1-f; next} f==0 && /^# [^#]/{sub(/^# /,""); print; exit}' "$doc_path")"
+    if [[ -n "$h1" ]] && [[ "$h1" != *" Agent" ]]; then
+        echo "  $doc_basename: top heading \"# $h1\" must end with \" Agent\" (e.g. \"# ${h1} Agent\")"
+        errors=$((errors + 1))
+    fi
+
     # Extract ## headers outside fenced code blocks
     actual_sections="$(awk 'BEGIN{f=0} /^```/{f=1-f; next} f==0 && /^## /{sub(/^## /,""); print}' "$doc_path")"
 
@@ -107,7 +114,7 @@ for yaml_file in "$HARNESS_DIR"/*.yaml; do
             errors=$((errors + 1))
         done
         for s in "${extra[@]+"${extra[@]}"}"; do
-            echo "    unexpected: \"## $s\""
+            echo "    unexpected: \"## $s\" — adding new sections is fine, but please add them to the REQUIRED_SECTIONS list in hack/lint-agent-docs so all agent docs stay consistent"
             errors=$((errors + 1))
         done
     else
