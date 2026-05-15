@@ -16,9 +16,14 @@ SCAFFOLD_DIR="internal/scaffold/fullsend-repo"
 WORKFLOW_DIR="${SCAFFOLD_DIR}/.github/workflows"
 TEMPLATE_DIR="${SCAFFOLD_DIR}/templates"
 
+ACTIONLINT="actionlint"
 if ! command -v actionlint &>/dev/null; then
-  echo "ERROR: actionlint not found. Run 'make bootstrap' to install it." >&2
-  exit 1
+  if command -v go &>/dev/null; then
+    ACTIONLINT="go run github.com/rhysd/actionlint/cmd/actionlint@latest"
+  else
+    echo "ERROR: actionlint not found and go not available. Run 'make bootstrap' to install it." >&2
+    exit 1
+  fi
 fi
 
 tmpdir=$(mktemp -d)
@@ -59,7 +64,7 @@ fi
 #   - "queue" concurrency key: GitHub merge queue extension, not yet in actionlint schema
 #   - workflow_repository: newer job context property, not yet in actionlint type defs
 #   - shellcheck SC2016: info-level "expressions don't expand in single quotes" — intentional
-output=$(cd "${tmpdir}" && actionlint \
+output=$(cd "${tmpdir}" && $ACTIONLINT \
   -ignore 'unexpected key "queue" for "concurrency"' \
   -ignore 'property "workflow_repository" is not defined' \
   -ignore 'SC2016' \
