@@ -138,6 +138,46 @@ Orgs customize layered directories by placing overrides in `customized/` subdire
 
 For per-repo mode, the same structure lives at `.fullsend/customized/` within the target repo.
 
+### How Override Resolution Works
+
+**File-level replacement, not field-level merging.** When you place a file in `customized/harness/code.yaml`, it completely replaces the upstream `harness/code.yaml`. There is no YAML field merging.
+
+**Example: Adding a skill to the code agent**
+
+To add a custom skill to the code agent's harness:
+
+1. **Copy the full upstream harness** from `fullsend-ai/fullsend` to your customization directory:
+   ```bash
+   # Get upstream harness
+   curl -o .fullsend/customized/harness/code.yaml \
+     https://raw.githubusercontent.com/fullsend-ai/fullsend/main/internal/scaffold/fullsend-repo/harness/code.yaml
+   ```
+
+2. **Edit the copy** to add your skill:
+   ```yaml
+   skills:
+     - skills/code-implementation      # Upstream skill
+     - skills/my-custom-validation      # Your custom skill
+   ```
+
+3. **Add your custom skill file**:
+   ```bash
+   # Create your custom skill
+   cat > .fullsend/customized/skills/my-custom-validation.md <<'EOF'
+   # My Custom Validation Skill
+   
+   [Your skill content...]
+   EOF
+   ```
+
+**At runtime**, the reusable workflow:
+- Copies upstream defaults to `harness/`, `skills/`, etc.
+- Copies your `customized/` files on top, **replacing** any files with matching names
+- The harness loads `harness/code.yaml` (now your customized version)
+- Your skill at `skills/my-custom-validation.md` is available
+
+**Important:** You must maintain the full harness structure. You cannot add just a `skills:` field—the entire YAML file must be present and valid.
+
 ## Agent Roles
 
 Each agent role has its own identity, permissions, and purpose:
@@ -198,24 +238,49 @@ Create `.fullsend/customized/agents/code.md` to override the default code agent 
 
 ### Customizing Harness Configuration
 
-Create `.fullsend/customized/harness/coder.yaml` to modify the coder agent's execution environment:
+Create `.fullsend/customized/harness/code.yaml` to override the code agent's execution environment.
+
+**Important:** This is a complete file replacement. Start by copying the upstream harness, then modify it:
 
 ```yaml
-# Extend the upstream code harness
+# Copy of upstream code.yaml with customizations
 agent: agents/code.md
-model: claude-opus-4-6  # Use Opus instead of default
-timeout_minutes: 45     # Increase timeout for complex tasks
+model: claude-opus-4-6           # Changed from: opus
+image: ghcr.io/fullsend-ai/fullsend-code:latest
+policy: policies/code.yaml
+timeout_minutes: 45              # Changed from: 35
 
-# Add org-specific skills
 skills:
   - skills/code-implementation
-  - skills/my-custom-linting.md  # Org-specific skill
+  - skills/my-custom-linting     # Added: org-specific skill
 
-# Custom validation
+plugins:
+  - plugins/gopls-lsp
+
+host_files:
+  - src: env/gcp-vertex.env
+    dest: /tmp/workspace/.env.d/gcp-vertex.env
+    expand: true
+  - src: ${GOOGLE_APPLICATION_CREDENTIALS}
+    dest: /tmp/workspace/.gcp-credentials.json
+  - src: ${GCP_OIDC_TOKEN_FILE}
+    dest: /tmp/workspace/.gcp-oidc-token
+    optional: true
+
+pre_script: scripts/pre-code.sh
+post_script: scripts/post-code.sh
+
 validation_loop:
-  script: scripts/custom-validate.sh
-  max_iterations: 5
+  script: scripts/custom-validate.sh  # Changed script
+  max_iterations: 5                   # Changed from: 2
+
+runner_env:
+  PUSH_TOKEN: "${PUSH_TOKEN}"
+  REPO_FULL_NAME: "${REPO_FULL_NAME}"
+  REPO_DIR: "${GITHUB_WORKSPACE}/target-repo"
 ```
+
+Then create your custom skill at `.fullsend/customized/skills/my-custom-linting.md`.
 
 ### Per-Repo Overrides
 
