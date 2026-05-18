@@ -197,7 +197,7 @@ Secrets and variables are deployed at different scopes depending on the installa
 **Target repo variables:**
 - `FULLSEND_MINT_URL`
 - `FULLSEND_GCP_REGION`
-- `FULLSEND_PER_REPO_GUARD` — Flag indicating per-repo mode
+- `FULLSEND_PER_REPO_INSTALL` — Flag indicating per-repo mode (set to "true")
 
 ### Secrets Layer Behavior
 

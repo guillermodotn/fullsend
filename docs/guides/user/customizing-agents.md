@@ -38,8 +38,8 @@ pre_script: scripts/pre-code.sh    # Runs on host before agent
 post_script: scripts/post-code.sh  # Runs on host after agent
 
 runner_env:                      # Env vars passed to runner (key-value map)
-  GITHUB_TOKEN: ""
-  FULLSEND_OUTPUT_DIR: ""
+  GITHUB_TOKEN: "${GH_TOKEN}"
+  FULLSEND_OUTPUT_DIR: "${RUNNER_TEMP}/output"
 
 validation_loop:                 # Iterative validation
   script: scripts/validate-output-schema.sh
