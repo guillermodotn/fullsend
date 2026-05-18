@@ -435,6 +435,8 @@ var executableFiles = map[string]struct{}{
 
 ## Key Source Files Reference
 
+> **Note:** Line counts are approximate and may drift as the codebase evolves.
+
 | File | Lines | Purpose |
 |------|-------|---------|
 | `internal/cli/root.go` | ~50 | CLI entry point, command registration |

@@ -46,7 +46,7 @@ The mint is a GCP Cloud Function that exchanges GitHub OIDC tokens for scoped Gi
 │  │     └─ Returns GCP federated access token         │           │
 │  │                                                   │           │
 │  │  3. Lookup PEM from Secret Manager                │           │
-│  │     ├─ Secret name: {org}-{role}-github-app-pem   │           │
+│  │     ├─ Secret name: fullsend-{org}--{role}-app-pem│           │
 │  │     └─ Returns PEM private key bytes              │           │
 │  │                                                   │           │
 │  │  4. Generate GitHub App JWT                       │           │
@@ -75,15 +75,15 @@ The mint is a GCP Cloud Function that exchanges GitHub OIDC tokens for scoped Gi
 
 The mint enforces minimum permission sets per role. Tokens cannot exceed these scopes:
 
-| Role | contents | pull_requests | issues | actions | checks | members | metadata |
-|------|----------|---------------|--------|---------|--------|---------|----------|
-| **fullsend** | write | write | write | write | write | read | read |
-| **triage** | read | read | write | — | — | — | read |
-| **coder** | write | write | write | read | write | — | read |
-| **review** | read | write | write | — | write | — | read |
-| **fix** | write | write | write | read | write | — | read |
-| **retro** | read | read | read | read | read | — | read |
-| **prioritize** | read | read | write | — | — | — | read |
+| Role | contents | pull_requests | issues | actions | checks | workflows | actions_variables | organization_projects | metadata |
+|------|----------|---------------|--------|---------|--------|-----------|-------------------|-----------------------|----------|
+| **fullsend** | write | write | — | write | — | write | read | — | read |
+| **triage** | read | — | write | — | — | — | — | — | read |
+| **coder** | write | write | write | — | read | — | — | — | read |
+| **review** | read | write | write | — | read | — | — | — | read |
+| **fix** | write | write | write | — | — | — | — | — | read |
+| **retro** | read | read | write | read | — | — | — | — | read |
+| **prioritize** | read | — | write | — | — | — | — | write | read |
 
 ### Mint Security Controls
 
@@ -253,7 +253,7 @@ The GCF provisioner handles full GCP infrastructure deployment:
 │  └─────────┬─────────┘                                          │
 │            ▼                                                    │
 │  ┌───────────────────┐                                          │
-│  │ Store PEMs in     │ {org}-{role}-github-app-pem              │
+│  │ Store PEMs in     │ fullsend-{org}--{role}-app-pem           │
 │  │ Secret Manager    │ for each agent role                      │
 │  └─────────┬─────────┘                                          │
 │            ▼                                                    │
