@@ -27,6 +27,7 @@ import (
 	"github.com/fullsend-ai/fullsend/internal/envfile"
 	"github.com/fullsend-ai/fullsend/internal/harness"
 	"github.com/fullsend-ai/fullsend/internal/sandbox"
+	"github.com/fullsend-ai/fullsend/internal/scaffold"
 	"github.com/fullsend-ai/fullsend/internal/security"
 	"github.com/fullsend-ai/fullsend/internal/ui"
 )
@@ -782,6 +783,30 @@ func bootstrapSandbox(sandboxName, repoDir, fullsendBinary string, h *harness.Ha
 		}
 	}
 
+	// Copy the self-check script into the sandbox so agents can validate
+	// output JSON against their schema before finishing. See #1107.
+	if checkScript, err := scaffold.FullsendRepoFile("scripts/fullsend-check-output"); err == nil {
+		tmpCheck, err := os.CreateTemp("", "fullsend-check-output-*")
+		if err != nil {
+			return fmt.Errorf("creating temp file for check script: %w", err)
+		}
+		if _, err := tmpCheck.Write(checkScript); err != nil {
+			tmpCheck.Close()
+			os.Remove(tmpCheck.Name())
+			return fmt.Errorf("writing check script: %w", err)
+		}
+		tmpCheck.Close()
+		remoteBin := fmt.Sprintf("%s/bin/fullsend-check-output", sandbox.SandboxWorkspace)
+		if err := sandbox.Upload(sandboxName, tmpCheck.Name(), remoteBin); err != nil {
+			os.Remove(tmpCheck.Name())
+			return fmt.Errorf("copying check script to sandbox: %w", err)
+		}
+		os.Remove(tmpCheck.Name())
+		if _, _, _, err := sandbox.Exec(sandboxName, fmt.Sprintf("chmod +x %s", remoteBin), 10*time.Second); err != nil {
+			return fmt.Errorf("chmod check script: %w", err)
+		}
+	}
+
 	// Scan plugin definitions for injection before copying into sandbox.
 	if scanPipeline != nil {
 		for _, pluginPath := range h.Plugins {
@@ -853,6 +878,23 @@ func bootstrapEnv(sandboxName, repoDir string, h *harness.Harness) error {
 	lines = append(lines, fmt.Sprintf("export CLAUDE_CONFIG_DIR=%s", sandbox.SandboxClaudeConfig))
 	lines = append(lines, fmt.Sprintf("export FULLSEND_OUTPUT_DIR=%s", outputDir))
 	lines = append(lines, fmt.Sprintf("export FULLSEND_TARGET_REPO_DIR=%s", repoDir))
+
+	// Expose output schema and expected filename inside the sandbox so
+	// agents can self-check output with fullsend-check-output. See #1107.
+	remoteSchemaPath := sandbox.SandboxWorkspace + "/.fullsend/output-schema.json"
+	if schemaHost, ok := h.RunnerEnv["FULLSEND_OUTPUT_SCHEMA"]; ok && schemaHost != "" {
+		if _, statErr := os.Stat(schemaHost); statErr == nil {
+			mkdirCmd := fmt.Sprintf("mkdir -p %s/.fullsend", sandbox.SandboxWorkspace)
+			if _, _, _, execErr := sandbox.Exec(sandboxName, mkdirCmd, 10*time.Second); execErr == nil {
+				if uploadErr := sandbox.Upload(sandboxName, schemaHost, remoteSchemaPath); uploadErr == nil {
+					lines = append(lines, fmt.Sprintf("export FULLSEND_OUTPUT_SCHEMA=%s", remoteSchemaPath))
+				}
+			}
+		}
+	}
+	if outputFile, ok := h.RunnerEnv["FULLSEND_OUTPUT_FILE"]; ok && outputFile != "" {
+		lines = append(lines, fmt.Sprintf("export FULLSEND_OUTPUT_FILE=%s", outputFile))
+	}
 
 	// Source all env files from .env.d/ (populated by host_files with expand: true).
 	lines = append(lines, fmt.Sprintf("for f in %s/.env.d/*.env; do [ -f \"$f\" ] && . \"$f\"; done", sandbox.SandboxWorkspace))
