@@ -1866,6 +1866,27 @@ func TestProvisionWIF_OrgScoped_GetProviderError_StillProceeds(t *testing.T) {
 		fake.lastWIFProviderConfig.AttributeCondition)
 }
 
+func TestParseConditionOrgs(t *testing.T) {
+	tests := []struct {
+		name      string
+		condition string
+		want      []string
+	}{
+		{"single org", "assertion.repository_owner == 'acme'", []string{"acme"}},
+		{"multiple orgs", "assertion.repository_owner in ['alpha', 'beta', 'gamma']", []string{"alpha", "beta", "gamma"}},
+		{"legacy repo-scoped", "assertion.repository == 'acme/.fullsend'", []string{"acme"}},
+		{"mixed case normalized", "assertion.repository_owner in ['AcMe', 'BETA']", []string{"acme", "beta"}},
+		{"empty condition", "", nil},
+		{"no quoted orgs", "assertion.repository_owner == true", nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseConditionOrgs(tc.condition)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestBuildAttributeCondition(t *testing.T) {
 	t.Run("single org scopes to repository_owner", func(t *testing.T) {
 		got := buildAttributeCondition([]string{"myorg"})

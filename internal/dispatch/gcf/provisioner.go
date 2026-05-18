@@ -668,7 +668,7 @@ func (p *Provisioner) provisionSelfManaged(ctx context.Context) (map[string]stri
 	projectNumber := wifResult.projectNumber
 	allOrgs := wifResult.allOrgs
 
-	// Step 4b: Grant Vertex AI access to each installing org's .fullsend repo
+	// Step 3: Grant Vertex AI access to each installing org's .fullsend repo
 	// at the project level (direct WIF — no intermediate service account).
 	// IAM policy changes can take up to 7 minutes to propagate.
 	for _, org := range installingOrgs {
@@ -1071,8 +1071,8 @@ func (p *Provisioner) ensureWIFPoolAndProvider(ctx context.Context, installingOr
 				merged[org] = true
 			}
 		}
-		sort.Strings(allOrgs)
 	}
+	sort.Strings(allOrgs)
 
 	attrCondition := buildAttributeCondition(allOrgs)
 	audiences := []string{oidcAudience, iamAudience(projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider)}
@@ -1176,6 +1176,12 @@ func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider string, err
 			return "", fmt.Errorf("creating WIF pool: %w", err)
 		}
 		parts := strings.SplitN(p.cfg.Repo, "/", 2)
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return "", fmt.Errorf("repo must be in owner/repo format, got %q", p.cfg.Repo)
+		}
+		if strings.ContainsAny(p.cfg.Repo, `'"`) {
+			return "", fmt.Errorf("invalid repo name %q: contains quotes", p.cfg.Repo)
+		}
 		p.cfg.WIFProvider = BuildRepoProviderID(parts[0], parts[1])
 		attrCondition := fmt.Sprintf("assertion.repository == '%s'", p.cfg.Repo)
 		audiences := []string{oidcAudience, iamAudience(projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider)}
