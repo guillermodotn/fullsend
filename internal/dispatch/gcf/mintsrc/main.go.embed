@@ -475,7 +475,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(req.Repos) > maxRepos {
-		writeError(w, http.StatusBadRequest, "too many repos (max 500)")
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("too many repos (max %d)", maxRepos))
 		return
 	}
 	for _, repo := range req.Repos {
