@@ -363,7 +363,7 @@ func DownloadFile(sandboxName, remotePath, localPath string) error {
 }
 
 // SafeDownload copies a directory from a sandbox to the local machine and then
-// sanitizes the result by removing symlinks and .git/hooks/.
+// sanitizes the result by removing dangerous symlinks (absolute or repo-escaping) and .git/hooks/.
 func SafeDownload(sandboxName, remoteDir, localDir string) error {
 	if err := Download(sandboxName, remoteDir, localDir); err != nil {
 		return err
