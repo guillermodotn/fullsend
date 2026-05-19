@@ -1408,7 +1408,7 @@ func scanOutputFiles(outputDir, traceID string, printer *ui.Printer) error {
 		return nil
 	}
 
-	redactor := security.NewSecretRedactor()
+	pipeline := security.OutputPipeline()
 	redacted := 0
 	findingsPath := filepath.Join(outputDir, "security", "findings.jsonl")
 
@@ -1430,7 +1430,7 @@ func scanOutputFiles(outputDir, traceID string, printer *ui.Printer) error {
 			return nil
 		}
 
-		result := redactor.Scan(string(content))
+		result := pipeline.Scan(string(content))
 		if len(result.Findings) > 0 {
 			redacted += len(result.Findings)
 			relPath, _ := filepath.Rel(outputDir, path)

@@ -186,15 +186,19 @@ Usage in a workflow step:
 				return nil
 			}
 
-			redactor := security.NewSecretRedactor()
-			result := redactor.Scan(text)
+			pipeline := security.OutputPipeline()
+			result := pipeline.Scan(text)
 
 			if len(result.Findings) > 0 {
-				printer.StepWarn(fmt.Sprintf("Redacted %d secret(s) from agent output", len(result.Findings)))
+				printer.StepWarn(fmt.Sprintf("Sanitized %d finding(s) in agent output", len(result.Findings)))
 				for _, f := range result.Findings {
 					printer.StepWarn(fmt.Sprintf("  %s: %s", f.Name, f.Detail))
 				}
-				fmt.Fprint(os.Stdout, result.Sanitized)
+				out := result.Sanitized
+				if out == "" {
+					out = text
+				}
+				fmt.Fprint(os.Stdout, out)
 			} else {
 				printer.StepDone("No secrets found in output")
 				fmt.Fprint(os.Stdout, text)
