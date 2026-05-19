@@ -1825,6 +1825,7 @@ func TestProvisionWIF_RepoScoped_LowercasesRepo(t *testing.T) {
 
 	assert.Equal(t, "assertion.repository == 'acme/widget'", fake.lastWIFProviderConfig.AttributeCondition)
 	assert.Contains(t, fake.projectIAMBindings[0].Member, "attribute.repository/acme/widget")
+	assert.Equal(t, "Acme/Widget", p.cfg.Repo, "ProvisionWIF should not mutate p.cfg.Repo")
 }
 
 func TestProvisionWIF_RepoScoped_DotPrefixRepo(t *testing.T) {
@@ -1882,12 +1883,14 @@ func TestProvisionWIF_RepoScoped_RejectsInvalidRepo(t *testing.T) {
 		{"no slash", "just-a-name", "owner/repo format"},
 		{"empty owner", "/repo", "owner/repo format"},
 		{"empty repo", "owner/", "owner/repo format"},
-		{"quotes in repo", "owner's/repo", "must contain only"},
+		{"quotes in owner", "owner's/repo", "invalid repo owner"},
 		{"backslash in repo", `owner/repo\`, "must contain only"},
 		{"spaces in repo", "owner/my repo", "must contain only"},
+		{"underscore in owner", "_owner/repo", "invalid repo owner"},
+		{"dot in owner", "owner.name/repo", "invalid repo owner"},
 		{"dot as repo", "owner/.", "cannot be"},
 		{"dotdot as repo", "owner/..", "cannot be"},
-		{"dot as owner", "./repo", "cannot be"},
+		{"dot as owner", "./repo", "invalid repo owner"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

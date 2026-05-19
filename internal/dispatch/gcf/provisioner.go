@@ -1189,20 +1189,23 @@ func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider string, err
 
 	var projectNumber string
 	providerID := p.cfg.WIFProvider
+	repo := strings.ToLower(p.cfg.Repo)
 	if p.cfg.Repo != "" {
 		// Repo-scoped: dedicated provider per repo, no org merge.
 		// Each repo gets a unique provider ID (via BuildRepoProviderID),
 		// so no risk of clobbering another repo's WIF condition.
-		p.cfg.Repo = strings.ToLower(p.cfg.Repo)
-		parts := strings.SplitN(p.cfg.Repo, "/", 2)
+		parts := strings.SplitN(repo, "/", 2)
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 			return "", fmt.Errorf("repo must be in owner/repo format, got %q", p.cfg.Repo)
 		}
-		if !githubRepoSlugPattern.MatchString(parts[0]) || !githubRepoSlugPattern.MatchString(parts[1]) {
-			return "", fmt.Errorf("invalid repo name %q: owner and repo must contain only alphanumeric, hyphens, dots, or underscores", p.cfg.Repo)
+		if !githubOrgPattern.MatchString(parts[0]) || strings.Contains(parts[0], "--") {
+			return "", fmt.Errorf("invalid repo owner %q: must be a valid GitHub org/user name", parts[0])
 		}
-		if parts[0] == "." || parts[0] == ".." || parts[1] == "." || parts[1] == ".." {
-			return "", fmt.Errorf("invalid repo name %q: owner and repo cannot be \".\" or \"..\"", p.cfg.Repo)
+		if !githubRepoSlugPattern.MatchString(parts[1]) {
+			return "", fmt.Errorf("invalid repo name %q: must contain only alphanumeric, hyphens, dots, or underscores", parts[1])
+		}
+		if parts[1] == "." || parts[1] == ".." {
+			return "", fmt.Errorf("invalid repo name %q: cannot be \".\" or \"..\"", parts[1])
 		}
 		var err error
 		projectNumber, err = p.gcpAPI.GetProjectNumber(ctx, p.cfg.ProjectID)
@@ -1213,7 +1216,7 @@ func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider string, err
 			return "", fmt.Errorf("creating WIF pool: %w", err)
 		}
 		providerID = BuildRepoProviderID(parts[0], parts[1])
-		attrCondition := fmt.Sprintf("assertion.repository == '%s'", p.cfg.Repo)
+		attrCondition := fmt.Sprintf("assertion.repository == '%s'", repo)
 		audiences := []string{oidcAudience, iamAudience(projectNumber, p.cfg.WIFPoolName, providerID)}
 		if err := p.gcpAPI.CreateWIFProvider(ctx, projectNumber, p.cfg.WIFPoolName, providerID, OIDCProviderConfig{
 			IssuerURI:          oidcIssuer,
@@ -1235,11 +1238,11 @@ func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider string, err
 	// Workflows that rely on these bindings may fail during that window.
 	if p.cfg.Repo != "" {
 		principal := fmt.Sprintf("principalSet://iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/attribute.repository/%s",
-			projectNumber, p.cfg.WIFPoolName, p.cfg.Repo)
+			projectNumber, p.cfg.WIFPoolName, repo)
 		if err := p.gcpAPI.SetProjectIAMBinding(ctx, p.cfg.ProjectID, principal, "roles/aiplatform.user"); err != nil {
-			return "", fmt.Errorf("granting Vertex AI access for repo %s: %w", p.cfg.Repo, err)
+			return "", fmt.Errorf("granting Vertex AI access for repo %s: %w", repo, err)
 		}
-		log.Printf("granted roles/aiplatform.user to %s (propagation may take several minutes)", p.cfg.Repo)
+		log.Printf("granted roles/aiplatform.user to %s (propagation may take several minutes)", repo)
 	} else {
 		for _, org := range orgs {
 			principal := fmt.Sprintf("principalSet://iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/attribute.repository/%s/.fullsend",
