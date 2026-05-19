@@ -1203,6 +1203,23 @@ func TestProvisioner_Provision_CreateWIFProviderError(t *testing.T) {
 	assert.Contains(t, err.Error(), "provider error")
 }
 
+func TestProvisioner_Provision_GetWIFProviderError_FailsFast(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.errs["GetWIFProvider"] = fmt.Errorf("transient error")
+
+	p := newTestProvisioner(Config{
+		ProjectID:         "test-project-id",
+		GitHubOrgs:        []string{"org"},
+		AgentPEMs:         singleRolePEMs(),
+		AgentAppIDs:       singleRoleAppIDs(),
+		FunctionSourceDir: fakeFunctionSourceDir(t),
+	}, fake)
+
+	_, err := p.Provision(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading existing WIF provider for merge")
+}
+
 func TestProvisioner_Provision_CreateSecretError(t *testing.T) {
 	fake := newFakeGCFClient()
 	fake.errs["GetSecret"] = ErrSecretNotFound
@@ -1836,7 +1853,9 @@ func TestProvisionWIF_RepoScoped_RejectsInvalidRepo(t *testing.T) {
 		{"no slash", "just-a-name", "owner/repo format"},
 		{"empty owner", "/repo", "owner/repo format"},
 		{"empty repo", "owner/", "owner/repo format"},
-		{"quotes in repo", "owner's/repo", "contains quotes"},
+		{"quotes in repo", "owner's/repo", "must contain only"},
+		{"backslash in repo", `owner/repo\`, "must contain only"},
+		{"spaces in repo", "owner/my repo", "must contain only"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

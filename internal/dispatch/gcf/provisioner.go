@@ -66,6 +66,9 @@ func DefaultFunctionSourceDir() string {
 // hyphens, cannot start or end with a hyphen, max 39 characters.
 var githubOrgPattern = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$`)
 
+// githubRepoSlugPattern validates a single GitHub repository name component.
+var githubRepoSlugPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+
 // gcpProjectIDPattern validates GCP project IDs (6-30 chars).
 var gcpProjectIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
 
@@ -1068,7 +1071,9 @@ func (p *Provisioner) ensureWIFPoolAndProvider(ctx context.Context, installingOr
 	}
 
 	allOrgs := make([]string, len(installingOrgs))
-	copy(allOrgs, installingOrgs)
+	for i, org := range installingOrgs {
+		allOrgs[i] = strings.ToLower(org)
+	}
 	existingProvider, getErr := p.gcpAPI.GetWIFProvider(ctx, projectNumber, p.cfg.WIFPoolName, p.cfg.WIFProvider)
 	if getErr != nil {
 		// A non-nil error means "unknown state" — proceeding would risk
@@ -1192,8 +1197,8 @@ func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider string, err
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 			return "", fmt.Errorf("repo must be in owner/repo format, got %q", p.cfg.Repo)
 		}
-		if strings.ContainsAny(p.cfg.Repo, `'"`) {
-			return "", fmt.Errorf("invalid repo name %q: contains quotes", p.cfg.Repo)
+		if !githubRepoSlugPattern.MatchString(parts[0]) || !githubRepoSlugPattern.MatchString(parts[1]) {
+			return "", fmt.Errorf("invalid repo name %q: owner and repo must contain only alphanumeric, hyphens, dots, or underscores", p.cfg.Repo)
 		}
 		var err error
 		projectNumber, err = p.gcpAPI.GetProjectNumber(ctx, p.cfg.ProjectID)
