@@ -1827,6 +1827,20 @@ func TestProvisionWIF_RepoScoped_LowercasesRepo(t *testing.T) {
 	assert.Contains(t, fake.projectIAMBindings[0].Member, "attribute.repository/acme/widget")
 }
 
+func TestProvisionWIF_RepoScoped_DotPrefixRepo(t *testing.T) {
+	fake := newFakeGCFClient()
+	p := NewProvisioner(Config{
+		ProjectID:  "my-project",
+		GitHubOrgs: []string{"nonflux"},
+		Repo:       "nonflux/.fullsend",
+	}, fake)
+
+	_, err := p.ProvisionWIF(context.Background())
+	require.NoError(t, err)
+
+	assert.Equal(t, "assertion.repository == 'nonflux/.fullsend'", fake.lastWIFProviderConfig.AttributeCondition)
+}
+
 func TestProvisionWIF_RepoScoped_DoesNotTouchSharedProvider(t *testing.T) {
 	fake := newFakeGCFClient()
 	fake.wifProvider = &WIFProviderInfo{
@@ -1871,9 +1885,9 @@ func TestProvisionWIF_RepoScoped_RejectsInvalidRepo(t *testing.T) {
 		{"quotes in repo", "owner's/repo", "must contain only"},
 		{"backslash in repo", `owner/repo\`, "must contain only"},
 		{"spaces in repo", "owner/my repo", "must contain only"},
-		{"leading dot in repo", "owner/.hidden", "must contain only"},
-		{"trailing dot in repo", "owner/repo.", "must contain only"},
-		{"leading dot in owner", ".owner/repo", "must contain only"},
+		{"dot as repo", "owner/.", "cannot be"},
+		{"dotdot as repo", "owner/..", "cannot be"},
+		{"dot as owner", "./repo", "cannot be"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

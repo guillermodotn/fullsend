@@ -67,7 +67,7 @@ func DefaultFunctionSourceDir() string {
 var githubOrgPattern = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$`)
 
 // githubRepoSlugPattern validates a single GitHub repository name component.
-var githubRepoSlugPattern = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9._-]{0,98}[a-zA-Z0-9])?$`)
+var githubRepoSlugPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,100}$`)
 
 // gcpProjectIDPattern validates GCP project IDs (6-30 chars).
 var gcpProjectIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
@@ -1200,6 +1200,9 @@ func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider string, err
 		}
 		if !githubRepoSlugPattern.MatchString(parts[0]) || !githubRepoSlugPattern.MatchString(parts[1]) {
 			return "", fmt.Errorf("invalid repo name %q: owner and repo must contain only alphanumeric, hyphens, dots, or underscores", p.cfg.Repo)
+		}
+		if parts[0] == "." || parts[0] == ".." || parts[1] == "." || parts[1] == ".." {
+			return "", fmt.Errorf("invalid repo name %q: owner and repo cannot be \".\" or \"..\"", p.cfg.Repo)
 		}
 		var err error
 		projectNumber, err = p.gcpAPI.GetProjectNumber(ctx, p.cfg.ProjectID)
