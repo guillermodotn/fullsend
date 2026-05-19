@@ -67,7 +67,7 @@ func DefaultFunctionSourceDir() string {
 var githubOrgPattern = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$`)
 
 // githubRepoSlugPattern validates a single GitHub repository name component.
-var githubRepoSlugPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+var githubRepoSlugPattern = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9._-]{0,98}[a-zA-Z0-9])?$`)
 
 // gcpProjectIDPattern validates GCP project IDs (6-30 chars).
 var gcpProjectIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
@@ -1193,6 +1193,7 @@ func (p *Provisioner) ProvisionWIF(ctx context.Context) (wifProvider string, err
 		// Repo-scoped: dedicated provider per repo, no org merge.
 		// Each repo gets a unique provider ID (via BuildRepoProviderID),
 		// so no risk of clobbering another repo's WIF condition.
+		p.cfg.Repo = strings.ToLower(p.cfg.Repo)
 		parts := strings.SplitN(p.cfg.Repo, "/", 2)
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 			return "", fmt.Errorf("repo must be in owner/repo format, got %q", p.cfg.Repo)
