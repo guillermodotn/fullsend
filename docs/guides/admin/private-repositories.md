@@ -1,0 +1,162 @@
+# Enabling fullsend on private repositories
+
+This guide covers what administrators need to configure when enabling fullsend on private repositories. It assumes you have already completed the [installation guide](installation.md) and have a working fullsend installation.
+
+## Prerequisites
+
+- A working fullsend installation (per-org or per-repo) — see [installation guide](installation.md)
+- Admin access to the target private repository
+- Familiarity with [AGENTS.md](../user/customizing-agents.md) and the [layered configuration model](../user/customizing-agents.md#layered-configuration-resolution)
+
+## How private repos differ from public repos
+
+Fullsend treats all repositories the same at the infrastructure level — the same agents, harness, and pipeline run regardless of visibility. The differences are operational, not architectural:
+
+1. **Information disclosure risk.** Agents process repository content (code, issues, PR descriptions) and produce output (comments, commits, filed issues) that may reference that content. In a public repo this is harmless — the content is already public. In a private repo, agent output that crosses a visibility boundary (e.g., an issue filed in a public `.fullsend` config repo) can leak private information. See [#1189](https://github.com/fullsend-ai/fullsend/issues/1189) for a concrete example involving the retro agent.
+
+2. **Sensitive data exposure.** Private repos are more likely to contain credentials, PII, internal hostnames, or proprietary logic. Agents may reproduce this content in their output — not because they are instructed to, but because quoting context is a natural part of code review, triage summaries, and retrospective analysis. The [security threat model](../../problems/security-threat-model.md#indirect-information-disclosure) documents how indirect disclosure bypasses content-level guardrails.
+
+3. **`.fullsend` config repo visibility.** The installation guide notes that the `.fullsend` config repo is created as **public** by default (required for cross-repo `workflow_call`). If your org has private repos enrolled, agent workflows in `.fullsend` may log run artifacts that reference private content. Consider whether your `.fullsend` repo's Actions logs need restricted access.
+
+## Which agents are safe to enable by default
+
+All agents are designed to operate safely, but some produce output with higher disclosure risk when processing private repos:
+
+| Agent | Default risk | Notes |
+|-------|-------------|-------|
+| **triage** | Low | Output stays within the source repo (labels, comments on the triggering issue). No cross-repo disclosure. |
+| **coder** | Low | Commits and PR descriptions stay within the source repo. |
+| **review** | Low | Review comments stay within the source repo's PR. |
+| **retro** | **Higher** | Files improvement issues that may target a different repo. If the target repo has broader visibility than the source, private content can leak. See [#1189](https://github.com/fullsend-ai/fullsend/issues/1189). |
+| **prioritize** | **Higher** | Analyzes issues across repos and may produce cross-repo summaries. If summaries reference private repo content, the same disclosure risk applies. |
+
+> **Recommendation:** Start with **triage**, **coder**, and **review** on private repos. Enable **retro** and **prioritize** only after configuring the guardrails described below.
+
+To limit which agents run on a specific repo, customize the harness configuration via the [layered configuration model](../user/customizing-agents.md#layered-configuration-resolution). The `--agents` flag during installation controls which agent apps are provisioned org-wide, but per-repo agent enablement is controlled by the shim workflow and harness overrides.
+
+## Configuring AGENTS.md for private repos
+
+The `AGENTS.md` file in a repository provides instructions that all agents follow. For private repos, add guidance that prevents agents from reproducing sensitive content in their output.
+
+### Example: preventing sensitive content reproduction
+
+Add the following section to your private repo's `AGENTS.md`:
+
+```markdown
+## Private repository rules
+
+This is a private repository. When producing output (comments, issues,
+commit messages, PR descriptions), follow these rules:
+
+1. **Do not quote credentials, tokens, API keys, or secrets** — even if
+   they appear in the code you are analyzing. Reference them by variable
+   name (e.g., "the `DB_PASSWORD` environment variable") rather than by
+   value.
+
+2. **Do not reproduce internal hostnames, IP addresses, or service
+   URLs** in output that may be visible outside this repository. Use
+   placeholders (e.g., `internal-service.example.com`) when describing
+   architecture.
+
+3. **Summarize rather than quote** when referencing code that contains
+   proprietary logic. Describe what the code does, not what it says.
+
+4. **Do not include file paths that reveal internal project structure**
+   in issues filed outside this repository. Describe the component
+   abstractly (e.g., "the authentication module") rather than by path.
+```
+
+### Example: restricting retro agent output
+
+If the retro agent is enabled, add specific guidance for cross-visibility filing:
+
+```markdown
+## Retro agent: cross-repo filing
+
+When filing improvement issues based on work in this repository:
+
+1. **Abstract all findings.** Describe patterns and improvements
+   generically. Do not include file paths, function names, variable
+   names, or code snippets from this repository.
+
+2. **Do not reference internal infrastructure** — hostnames, service
+   names, deployment targets, or configuration values must not appear
+   in issues filed to public repositories.
+
+3. **Frame improvements as general patterns.** Instead of "the
+   `AuthService.validateToken()` method in `internal/auth/` should
+   use constant-time comparison," write "token validation should use
+   constant-time comparison to prevent timing attacks."
+```
+
+## Testing that guardrails are working
+
+After configuring `AGENTS.md` and enabling agents on a private repo, verify that the guardrails prevent information disclosure.
+
+### 1. Create a test issue with sensitive context
+
+File an issue in your private repo that references internal details:
+
+```markdown
+## Bug report
+
+The endpoint at `https://api.internal.example.com:8443/v2/auth`
+returns a 500 when called with the service account
+`svc-pipeline@project.iam.gserviceaccount.com`. The error log
+shows the database connection string includes the password in
+cleartext.
+```
+
+### 2. Verify triage output
+
+After the triage agent processes the issue, review its comment:
+
+- Does it quote the internal hostname verbatim, or describe it abstractly?
+- Does it reproduce the service account identifier?
+- Does the triage summary avoid including the database connection detail?
+
+### 3. Test cross-repo agents (if enabled)
+
+If the retro agent is enabled, trigger it on a merged PR and check the filed issue:
+
+- Is the issue filed in a repo with broader visibility?
+- Does the issue body contain file paths, function names, or code from the private repo?
+- Are findings described as general patterns rather than repo-specific details?
+
+### 4. Review Actions logs
+
+Check the GitHub Actions logs for agent runs in both the target repo and `.fullsend`:
+
+- Do log outputs contain sensitive values from the private repo?
+- Are the harness-level [secret redaction](../user/customizing-agents.md#harness-yaml-structure) and output scanning working as expected?
+
+> **Note:** Agent output goes through the harness-level `SecretRedactor` pipeline before being applied (see [ADR 0022](../../ADRs/0022-harness-level-output-schema-enforcement.md)). This catches known secret patterns but cannot catch all forms of sensitive content — `AGENTS.md` instructions are your primary defense for context-specific information.
+
+## What should not be deployed based on data sensitivity
+
+Not all private repos are equal. A repo containing open-source code that happens to be private (e.g., pre-release) has different risk than a repo containing PII, financial data, or security credentials.
+
+### High-sensitivity repos (PII, credentials, financial data)
+
+- **Enable only:** triage, coder, review
+- **Disable:** retro, prioritize (any agent that produces cross-repo output)
+- **Require:** `AGENTS.md` with the private repository rules above
+- **Consider:** Restricting the `.fullsend` config repo Actions log visibility, since workflow logs may contain references to private repo content
+
+### Medium-sensitivity repos (proprietary code, internal tooling)
+
+- **Enable:** triage, coder, review
+- **Enable with caution:** retro, prioritize — only if AGENTS.md guardrails are configured and tested
+- **Require:** `AGENTS.md` with at minimum the sensitive-content-reproduction rules
+
+### Low-sensitivity repos (pre-release public code, internal docs)
+
+- **Enable:** all agents
+- **Recommended:** `AGENTS.md` with basic private-repo rules as defense in depth
+
+## See also
+
+- [Installation guide](installation.md) — Initial fullsend setup
+- [Customizing agents](../user/customizing-agents.md) — Harness configuration and layered overrides
+- [Security threat model](../../problems/security-threat-model.md) — Threat priority and defense considerations
+- [#1189](https://github.com/fullsend-ai/fullsend/issues/1189) — Retro agent private content leak risk
