@@ -21,6 +21,37 @@ This guide walks through installing fullsend in a GitHub organization and enroll
   - [IAM Credentials](https://console.cloud.google.com/apis/library/iamcredentials.googleapis.com) (WIF token exchange)
   - [Cloud Resource Manager](https://console.cloud.google.com/apis/library/cloudresourcemanager.googleapis.com) (project number lookup)
 
+- **GCP IAM roles** — the user running `fullsend admin install` authenticates via ADC (`gcloud auth application-default login`) and needs the following IAM roles on the target GCP project:
+
+  | Role | What it covers |
+  |------|----------------|
+  | `roles/iam.workloadIdentityPoolAdmin` | Create, read, update, and undelete WIF pools and providers |
+  | `roles/iam.serviceAccountAdmin` | Create the `fullsend-mint` service account |
+  | `roles/resourcemanager.projectIamAdmin` | Read and set project-level IAM policy (grants `roles/aiplatform.user` to WIF principals) |
+  | `roles/secretmanager.admin` | Create secrets, add versions, read and set secret-level IAM policy |
+  | `roles/cloudfunctions.developer` | Deploy, update, and inspect the mint Cloud Function |
+  | `roles/run.admin` | Read and set Cloud Run IAM policy (sets `allUsers` as invoker) |
+
+  `roles/owner` covers all of the above for users with broad access.
+
+  Grant all required roles with a single script:
+
+  ```bash
+  for ROLE in \
+    roles/iam.workloadIdentityPoolAdmin \
+    roles/iam.serviceAccountAdmin \
+    roles/resourcemanager.projectIamAdmin \
+    roles/secretmanager.admin \
+    roles/cloudfunctions.developer \
+    roles/run.admin; do
+    gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
+      --member="user:$INSTALLER_EMAIL" \
+      --role="$ROLE"
+  done
+  ```
+
+  > **Reducing required roles:** If you supply `--inference-wif-provider` with a pre-existing WIF provider, `roles/iam.workloadIdentityPoolAdmin` is not needed. If you supply `--skip-mint-check` with `--mint-url`, no GCP roles are needed at all (all GCP provisioning is skipped).
+
 ### OAuth scope reference
 
 The table below lists every scope the installer may request and why. You are never asked for all of them at once — the preflight check requests only the scopes needed for the operation you are running.
