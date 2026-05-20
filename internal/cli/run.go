@@ -694,7 +694,11 @@ func runAgent(ctx context.Context, agentName, fullsendDir, outputBase, targetRep
 			break
 		}
 
-		printer.StepFail("Validation failed: " + strings.TrimSpace(string(valOut)))
+		msg := strings.TrimSpace(string(valOut))
+		if msg == "" {
+			msg = valErr.Error()
+		}
+		printer.StepFail("Validation failed: " + msg)
 		if iteration < maxIterations {
 			printer.StepInfo(fmt.Sprintf("Will retry (%d iterations remaining)", maxIterations-iteration))
 		}
