@@ -10,8 +10,8 @@ This guide walks through running fullsend agents on your machine using released 
 |-------------|-------|-------|
 | Container runtime | Podman Desktop with a running machine | Podman |
 | [OpenShell](https://github.com/NVIDIA/OpenShell) | 0.0.38 | 0.0.38 |
-| GCP credentials | Service account key (`Vertex AI User` role) | Same |
-| GitHub PAT | `repo` scope for the target org | Same |
+| GCP credentials | Service account key (see [GCP credentials](#gcp-credentials) below) | Same |
+| GitHub PAT | Classic PAT with `repo` scope (see [GitHub tokens](#github-tokens) below) | Same |
 
 > **No Go toolchain required.** On macOS, the CLI automatically downloads a Linux binary for the sandbox. See [Cross-platform binary resolution](#cross-platform-binary-resolution) below.
 
@@ -72,18 +72,43 @@ gh repo clone <org>/.fullsend /tmp/fullsend-dot
 
 Env files contain secrets and must never be committed. Keep your env file outside the repo (e.g. `/tmp/fullsend.env`).
 
-### Core variables (all agents)
+### GCP credentials
+
+In CI, fullsend uses Workload Identity Federation (WIF) to authenticate to Vertex AI — no service account keys are stored. Locally, use a service account key instead:
 
 ```bash
 ANTHROPIC_VERTEX_PROJECT_ID=<gcp-project-with-vertex-ai>
+GOOGLE_CLOUD_PROJECT=<gcp-project-with-vertex-ai>
 CLOUD_ML_REGION=global
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa-key.json
-GH_TOKEN=<github-pat>
 ```
+
+The service account needs the `Vertex AI User` role (`roles/aiplatform.user`) on the project. Create a key with:
+
+```bash
+gcloud iam service-accounts keys create sa-key.json \
+  --iam-account=<sa-name>@<project>.iam.gserviceaccount.com
+```
+
+> WIF's OIDC token refresh is handled automatically in CI. With a service account key locally, no refresh is needed — the key is valid for the duration of the run.
+
+### GitHub tokens
+
+In CI, fullsend mints separate GitHub App installation tokens per role (read-only for sandboxes, write-scoped for post-scripts). Locally, a single classic PAT with `repo` scope can serve all three token variables:
+
+```bash
+GH_TOKEN=<github-pat>
+PUSH_TOKEN=<github-pat>
+REVIEW_TOKEN=<github-pat>
+```
+
+All three can be the same PAT. The separation exists for CI's security architecture (read-only tokens inside sandboxes, write tokens only on the runner for post-scripts), but locally a single token works.
+
+The PAT needs `repo` scope for the target organization. Fine-grained PATs are not supported because they cannot span multiple repositories in the same org.
 
 ### Per-agent variables
 
-Each agent requires additional variables via its harness `runner_env`. Add the ones needed for the agent you want to run:
+Each agent requires additional variables via its harness `runner_env` and sandbox env files. Add the ones needed for the agent you want to run:
 
 | Variable | Agent(s) | Description |
 |----------|----------|-------------|
@@ -91,10 +116,8 @@ Each agent requires additional variables via its harness `runner_env`. Add the o
 | `REPO_FULL_NAME` | code, review, fix | `owner/repo` of the target repository |
 | `ISSUE_NUMBER` | code | Issue number the code agent should implement |
 | `TARGET_BRANCH` | code, fix | Branch to base work on (e.g. `main`) |
-| `PUSH_TOKEN` | code, fix | GitHub token with push access for the post-script |
 | `PR_NUMBER` | review, fix | Pull request number to review or fix |
 | `GITHUB_PR_URL` | review | Full URL of the pull request to review |
-| `REVIEW_TOKEN` | review | GitHub token for posting review comments |
 | `REVIEW_BODY_FILE` | fix | Path to a file containing the review body to fix |
 
 See the harness definitions in `harness/*.yaml` within your `.fullsend` config directory for the complete list per agent.
