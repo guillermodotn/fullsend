@@ -9,7 +9,7 @@ import (
 )
 
 // GenerateCode produces a 6-digit TOTP code from a base32-encoded secret.
-// If the current time is within 5 seconds of a 30-second period boundary,
+// If the current time is within 4 seconds of a 30-second period boundary,
 // it sleeps until the next period to avoid generating a code that expires
 // before the recipient can validate it.
 func GenerateCode(secret string) (string, error) {
