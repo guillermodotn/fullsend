@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/fullsend-ai/fullsend/e2e/internal/otp"
 	"github.com/playwright-community/playwright-go"
@@ -60,6 +59,18 @@ func handleSudoIfPresent(page playwright.Page, password, totpSecret, screenshotD
 		if err := passwordInput.Fill(password); err != nil {
 			return false, fmt.Errorf("filling sudo password: %w", err)
 		}
+	} else if passwordVisible && totpSecret != "" {
+		if handled, err := handleTOTPIfPresent(page, totpSecret, screenshotDir, logf); err != nil {
+			return false, fmt.Errorf("TOTP on sudo page (password field present but empty): %w", err)
+		} else if handled {
+			if err := waitForPageToLeave(page, "Confirm access", "Sudo"); err != nil {
+				saveDebugScreenshot(page, screenshotDir, "sudo-totp-still-on-page", logf)
+				return false, err
+			}
+			return true, nil
+		}
+		saveDebugScreenshot(page, screenshotDir, "sudo-password-not-set", logf)
+		return false, fmt.Errorf("sudo page shows password field but neither password nor TOTP succeeded")
 	} else if passwordVisible {
 		saveDebugScreenshot(page, screenshotDir, "sudo-password-not-set", logf)
 		return false, fmt.Errorf("sudo page shows password field but E2E_GITHUB_PASSWORD is not set")
@@ -69,6 +80,10 @@ func handleSudoIfPresent(page playwright.Page, password, totpSecret, screenshotD
 		} else if !handled {
 			saveDebugScreenshot(page, screenshotDir, "sudo-no-auth-method", logf)
 			return false, fmt.Errorf("sudo page has no visible password or TOTP field")
+		}
+		if err := waitForPageToLeave(page, "Confirm access", "Sudo"); err != nil {
+			saveDebugScreenshot(page, screenshotDir, "sudo-totp-still-on-page", logf)
+			return false, err
 		}
 		return true, nil
 	} else {
@@ -106,30 +121,22 @@ func handleTOTPIfPresent(page playwright.Page, totpSecret, screenshotDir string,
 	return handled, err
 }
 
-// waitForPageToLeave polls the page title until it no longer contains any
-// of the given substrings, or until the timeout (10s) is reached.
+// waitForPageToLeave waits until the page title no longer contains any of
+// the given substrings, or until the timeout (10s) is reached.
 func waitForPageToLeave(page playwright.Page, titleSubstrings ...string) error {
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		title, err := page.Title()
-		if err != nil {
-			return fmt.Errorf("checking page title: %w", err)
-		}
-		still := false
-		for _, sub := range titleSubstrings {
-			if strings.Contains(title, sub) {
-				still = true
-				break
-			}
-		}
-		if !still {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("still on page after 10s (title: %s)", title)
-		}
-		time.Sleep(250 * time.Millisecond)
+	checks := make([]string, len(titleSubstrings))
+	for i, sub := range titleSubstrings {
+		checks[i] = fmt.Sprintf("!document.title.includes(%q)", sub)
 	}
+	jsExpr := "() => " + strings.Join(checks, " && ")
+	_, err := page.WaitForFunction(jsExpr, nil, playwright.PageWaitForFunctionOptions{
+		Timeout: playwright.Float(10000),
+	})
+	if err != nil {
+		title, _ := page.Title()
+		return fmt.Errorf("still on page after 10s (title: %s)", title)
+	}
+	return nil
 }
 
 // saveDebugScreenshot saves a screenshot to dir for debugging.

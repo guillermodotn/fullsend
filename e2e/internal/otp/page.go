@@ -49,7 +49,7 @@ func EnterTOTPCode(page playwright.Page, secret string, logf func(string, ...any
 		// GitHub's 2FA form auto-submits when 6 digits are entered.
 		// Wait for the page to navigate away.
 		if err := page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-			State: playwright.LoadStateNetworkidle,
+			State: playwright.LoadStateDomcontentloaded,
 		}); err != nil {
 			return false, fmt.Errorf("waiting for post-TOTP navigation: %w", err)
 		}
@@ -64,8 +64,10 @@ func EnterTOTPCode(page playwright.Page, secret string, logf func(string, ...any
 		}
 
 		if attempt == 1 {
-			logf("[totp] First TOTP code not accepted, retrying with fresh code")
-			time.Sleep(2 * time.Second)
+			rem := time.Now().Second() % 30
+			wait := time.Duration(30-rem+1) * time.Second
+			logf("[totp] First TOTP code not accepted, waiting %s for next period", wait)
+			time.Sleep(wait)
 		}
 	}
 
