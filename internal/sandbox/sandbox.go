@@ -135,19 +135,16 @@ func EnsureAvailable() error {
 	return nil
 }
 
-// EnsureGateway starts a local gateway if none is active. It is idempotent —
-// if a gateway is already running the command is a no-op.
-func EnsureGateway() error {
-	// Check if a gateway is already active.
-	check := exec.Command("openshell", "gateway", "info")
-	if err := check.Run(); err == nil {
-		return nil
-	}
-
-	cmd := exec.Command("openshell", "gateway", "start")
-	out, err := cmd.CombinedOutput()
+// CheckGateway verifies that an openshell gateway is already running.
+// The gateway must be started externally (e.g. in CI via the action.yml steps)
+// before invoking fullsend run.
+func CheckGateway() error {
+	out, err := exec.Command("openshell", "gateway", "list").CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("gateway start failed: %s", string(out))
+		return fmt.Errorf("no openshell gateway running (openshell gateway list: %s) -- start openshell-gateway before running fullsend", strings.TrimSpace(string(out)))
+	}
+	if strings.TrimSpace(string(out)) == "" {
+		return fmt.Errorf("no openshell gateway configured -- start openshell-gateway before running fullsend")
 	}
 	return nil
 }
@@ -193,16 +190,29 @@ func Create(name string, providers []string, image, policy string) error {
 
 	// Wait for sandbox to be fully ready (image pull can take a while).
 	deadline := time.Now().Add(readyTimeout)
+	var lastOutput, lastStderr string
 	for time.Now().Before(deadline) {
 		check := exec.Command("openshell", "sandbox", "get", name)
-		output, checkErr := check.Output()
-		if checkErr == nil && strings.Contains(string(output), "Ready") {
+		var stdoutBuf, stderrBuf strings.Builder
+		check.Stdout = &stdoutBuf
+		check.Stderr = &stderrBuf
+		checkErr := check.Run()
+		lastOutput = stdoutBuf.String()
+		lastStderr = stderrBuf.String()
+		if checkErr == nil && strings.Contains(lastOutput, "Ready") {
 			return nil
 		}
 		time.Sleep(readyPoll)
 	}
 
-	return fmt.Errorf("sandbox %q not ready after %s", name, readyTimeout)
+	// Collect sandbox logs to help diagnose the failure.
+	supervisorLogs, _ := CollectLogs(name, "supervisor")
+	gatewayLogs, _ := CollectLogs(name, "gateway")
+
+	containerLogs := collectPodmanLogs(name)
+
+	return fmt.Errorf("sandbox %q not ready after %s\nstdout: %s\nstderr: %s\nsupervisor logs: %s\ngateway logs: %s\ncontainer logs: %s",
+		name, readyTimeout, lastOutput, lastStderr, supervisorLogs, gatewayLogs, containerLogs)
 }
 
 // Delete deletes a sandbox, returning any error for the caller to log.
@@ -397,6 +407,63 @@ func CollectLogs(name, source string) (string, error) {
 		return "", fmt.Errorf("openshell logs %q --source %s: %s", name, source, string(out))
 	}
 	return string(out), nil
+}
+
+const (
+	podmanLogTimeout  = 15 * time.Second
+	maxContainerLogs  = 1 << 20 // 1 MB
+	podmanLogTailLines = "200"
+)
+
+// collectPodmanLogs gathers recent container logs for diagnostics when a
+// sandbox fails to become ready. Filters by sandbox name prefix, caps
+// per-container output with --tail, and limits total size.
+func collectPodmanLogs(sandboxName string) string {
+	if _, err := exec.LookPath("podman"); err != nil {
+		return "(podman not available on this host)"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), podmanLogTimeout)
+	defer cancel()
+
+	listCmd := exec.CommandContext(ctx, "podman", "ps", "-a",
+		"--filter", "name="+sandboxName,
+		"--format", "{{.Names}}")
+	listOut, listErr := listCmd.Output()
+	if listErr != nil {
+		return fmt.Sprintf("(podman ps failed: %v)", listErr)
+	}
+
+	names := strings.TrimSpace(string(listOut))
+	if names == "" {
+		return "(no matching containers)"
+	}
+
+	var b strings.Builder
+	for _, cname := range strings.Split(names, "\n") {
+		cname = strings.TrimSpace(cname)
+		if cname == "" {
+			continue
+		}
+		logCmd := exec.CommandContext(ctx, "podman", "logs", "--tail", podmanLogTailLines, cname)
+		logOut, logErr := logCmd.CombinedOutput()
+		if logErr != nil {
+			chunk := fmt.Sprintf("=== %s === (log collection failed: %v)\n", cname, logErr)
+			if b.Len()+len(chunk) > maxContainerLogs {
+				b.WriteString("... (truncated)\n")
+				break
+			}
+			b.WriteString(chunk)
+			continue
+		}
+		chunk := fmt.Sprintf("=== %s ===\n%s\n", cname, string(logOut))
+		if b.Len()+len(chunk) > maxContainerLogs {
+			b.WriteString("... (truncated)\n")
+			break
+		}
+		b.WriteString(chunk)
+	}
+	return b.String()
 }
 
 // ExtractTranscripts copies Claude transcript files (.jsonl) from the sandbox

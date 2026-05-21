@@ -123,7 +123,13 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 		}
 		return os.Getenv(key)
 	}
-	if err := h.ValidateRunnerEnvWith(expander); err != nil {
+	lookup := func(key string) (string, bool) {
+		if key == "FULLSEND_DIR" {
+			return absFullsendDir, true
+		}
+		return os.LookupEnv(key)
+	}
+	if err := h.ValidateRunnerEnvWith(lookup); err != nil {
 		printer.StepFail("Environment validation failed")
 		return fmt.Errorf("validating env: %w", err)
 	}
@@ -193,14 +199,14 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	}
 	printer.StepDone(fmt.Sprintf("openshell available (%.1fs)", time.Since(openshellStart).Seconds()))
 
-	// 2a. Ensure a gateway is running.
+	// 2a. Check that a gateway is running.
 	gatewayStart := time.Now()
-	printer.StepStart("Ensuring gateway")
-	if err := sandbox.EnsureGateway(); err != nil {
-		printer.StepFail("Failed to start gateway")
-		return fmt.Errorf("starting gateway: %w", err)
+	printer.StepStart("Checking gateway")
+	if err := sandbox.CheckGateway(); err != nil {
+		printer.StepFail("Gateway not running")
+		return fmt.Errorf("gateway check failed: %w", err)
 	}
-	printer.StepDone(fmt.Sprintf("Gateway ready (%.1fs)", time.Since(gatewayStart).Seconds()))
+	printer.StepDone(fmt.Sprintf("Gateway available (%.1fs)", time.Since(gatewayStart).Seconds()))
 
 	// 2b. Ensure providers exist on the gateway (if any declared).
 	if len(h.Providers) > 0 {

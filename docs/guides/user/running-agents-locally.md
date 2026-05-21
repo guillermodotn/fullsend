@@ -37,7 +37,7 @@ mv fullsend_0.4.0_darwin_arm64/fullsend $HOME/.local/bin/
 Verify the installation:
 
 ```bash
-fullsend version
+fullsend --version
 ```
 
 ## 2. Install OpenShell
@@ -138,13 +138,19 @@ Each agent requires additional variables via its harness `runner_env` and sandbo
 
 | Variable | Agent(s) | Description |
 |----------|----------|-------------|
-| `GITHUB_ISSUE_URL` | triage, prioritize | Full URL of the GitHub issue to triage or prioritize |
+| `GITHUB_ISSUE_URL` | triage, code, prioritize | Full URL of the GitHub issue |
 | `REPO_FULL_NAME` | code, review, fix, retro | `owner/repo` of the target repository |
 | `ISSUE_NUMBER` | code | Issue number the code agent should implement |
 | `TARGET_BRANCH` | code, fix | Branch to base work on (e.g. `main`) |
+| `GITHUB_WORKSPACE` | code, fix | Parent directory of the target repo checkout |
 | `PR_NUMBER` | review, fix | Pull request number to review or fix |
 | `GITHUB_PR_URL` | review | Full URL of the pull request to review |
 | `REVIEW_BODY_FILE` | fix | Path to a file containing the review body to fix |
+| `PUSH_TOKEN_SOURCE` | fix | Token source type (use `pat` for local runs) |
+| `FIX_ITERATION` | fix | Current fix iteration (use `1` for local runs) |
+| `TRIGGER_SOURCE` | fix | What triggered the fix (use `manual` for local runs) |
+| `HUMAN_INSTRUCTION` | fix | Free-text instruction (can be empty) |
+| `PRE_AGENT_HEAD` | fix | Git HEAD before agent ran (can be empty locally) |
 | `ORG` | prioritize | GitHub organization name |
 | `PROJECT_NUMBER` | prioritize | GitHub Projects (v2) project number |
 | `ORIGINATING_URL` | retro | URL of the PR or issue to run a retrospective on |
@@ -247,8 +253,12 @@ Add to your env file:
 ```bash
 REPO_FULL_NAME=owner/repo
 ISSUE_NUMBER=42
+GITHUB_ISSUE_URL=https://github.com/owner/repo/issues/42
 TARGET_BRANCH=main
+GITHUB_WORKSPACE=/path/to/parent-of-target-repo
 ```
+
+`GITHUB_WORKSPACE` is required by the code and fix harnesses — it is the directory containing the `target-repo/` checkout (same as `$GITHUB_WORKSPACE` in GitHub Actions runners).
 
 ```bash
 fullsend run code \
@@ -266,7 +276,15 @@ REPO_FULL_NAME=owner/repo
 PR_NUMBER=123
 TARGET_BRANCH=main
 REVIEW_BODY_FILE=/path/to/review-body.txt
+GITHUB_WORKSPACE=/path/to/parent-of-target-repo
+PUSH_TOKEN_SOURCE=pat
+FIX_ITERATION=1
+TRIGGER_SOURCE=manual
+HUMAN_INSTRUCTION=
+PRE_AGENT_HEAD=
 ```
+
+`HUMAN_INSTRUCTION` and `PRE_AGENT_HEAD` can be empty for local testing.
 
 ```bash
 fullsend run fix \
@@ -408,6 +426,9 @@ When using a released binary (this guide's workflow), **strategy 2 applies autom
 
 **arm64 sandbox image pull fails**
 - The default `:latest` tag is amd64-only. Add `FULLSEND_SANDBOX_IMAGE=ghcr.io/fullsend-ai/fullsend-sandbox:dev` to your env file
+
+**`L7 policy validation failed: unknown protocol 'tcp'`**
+- OpenShell 0.0.38 uses `protocol: rest` (not `tcp`) and `access: read-write`/`read-only` (not `allow`). Update your policy YAML files to use the new schema. See the built-in policies in `policies/` for examples.
 
 **`unable to replace "host-gateway"` on macOS**
 - Set `host_containers_internal_ip = "192.168.127.254"` under `[containers]` in `~/.config/containers/containers.conf` and restart the Podman machine
