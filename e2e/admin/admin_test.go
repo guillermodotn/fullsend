@@ -3,11 +3,15 @@
 package admin
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -348,15 +352,32 @@ Files over 64KB save fine if they contain only ASCII characters.`
 	}
 	require.NotNil(t, finalRun, "triage workflow run should have completed within deadline")
 
-	// If the run failed, fetch logs for debugging.
+	// If the run failed, save logs and artifacts for debugging.
 	if finalRun.Conclusion != "success" {
+		runURL := fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d", env.org, forge.ConfigRepoName, finalRun.ID)
+		fmt.Fprintf(os.Stderr, "::notice::Triage workflow run %d failed (conclusion: %s). Downloading debug artifacts. Run URL: %s\n", finalRun.ID, finalRun.Conclusion, runURL)
+
+		debugDir := filepath.Join(env.screenshotDir, fmt.Sprintf("triage-run-%d", finalRun.ID))
+		_ = os.MkdirAll(debugDir, 0o755)
+
+		// Save workflow logs.
 		logs, logErr := env.client.GetWorkflowRunLogs(ctx, env.org, forge.ConfigRepoName, finalRun.ID)
 		if logErr != nil {
 			t.Logf("Could not fetch run logs: %v", logErr)
 		} else {
+			logPath := filepath.Join(debugDir, "workflow-logs.txt")
+			if writeErr := os.WriteFile(logPath, []byte(logs), 0o644); writeErr != nil {
+				t.Logf("Could not write logs to %s: %v", logPath, writeErr)
+			} else {
+				fmt.Fprintf(os.Stderr, "::notice file=%s::Triage run %d workflow logs saved\n", logPath, finalRun.ID)
+			}
 			t.Logf("Workflow run logs:\n%s", logs)
 		}
-		t.Fatalf("Triage workflow run %d concluded with %q, expected success", finalRun.ID, finalRun.Conclusion)
+
+		// Download run artifacts (transcripts, etc).
+		downloadRunArtifacts(ctx, env.token, env.org, forge.ConfigRepoName, finalRun.ID, debugDir, t)
+
+		t.Fatalf("Triage workflow run %d concluded with %q, expected success. Debug artifacts saved to %s", finalRun.ID, finalRun.Conclusion, debugDir)
 	}
 
 	// Verify the triage agent posted a comment on the issue.
@@ -406,6 +427,136 @@ Files over 64KB save fine if they contain only ASCII characters.`
 	}
 	assert.True(t, hasTriageLabel,
 		"issue should have a triage label (needs-info, ready-to-code, duplicate, or blocked), got: %v", labelNames)
+}
+
+// downloadRunArtifacts fetches all artifacts from a workflow run and extracts
+// them into destDir. Each artifact is extracted into a subdirectory named after
+// the artifact. This captures transcripts, screenshots, and other debug data
+// that the agent run uploads.
+func downloadRunArtifacts(ctx context.Context, token, org, repo string, runID int, destDir string, t *testing.T) {
+	t.Helper()
+
+	// List artifacts for the run.
+	listURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/runs/%d/artifacts", org, repo, runID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
+	if err != nil {
+		t.Logf("[artifacts] Could not create request: %v", err)
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Logf("[artifacts] Could not list artifacts: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Logf("[artifacts] List artifacts returned HTTP %d", resp.StatusCode)
+		return
+	}
+
+	var result struct {
+		Artifacts []struct {
+			ID   int    `json:"id"`
+			Name string `json:"name"`
+		} `json:"artifacts"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Logf("[artifacts] Could not decode artifact list: %v", err)
+		return
+	}
+
+	if len(result.Artifacts) == 0 {
+		t.Log("[artifacts] No artifacts found for this run")
+		return
+	}
+
+	t.Logf("[artifacts] Found %d artifact(s), downloading...", len(result.Artifacts))
+	for _, art := range result.Artifacts {
+		downloadAndExtractArtifact(ctx, token, org, repo, art.ID, art.Name, destDir, t)
+	}
+}
+
+// downloadAndExtractArtifact downloads a single artifact zip and extracts it.
+func downloadAndExtractArtifact(ctx context.Context, token, org, repo string, artifactID int, name, destDir string, t *testing.T) {
+	t.Helper()
+
+	dlURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/artifacts/%d/zip", org, repo, artifactID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, dlURL, nil)
+	if err != nil {
+		t.Logf("[artifacts] Could not create download request for %s: %v", name, err)
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Logf("[artifacts] Could not download %s: %v", name, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Logf("[artifacts] Download %s returned HTTP %d", name, resp.StatusCode)
+		return
+	}
+
+	// Read the zip into memory (artifacts are typically small).
+	zipData, err := io.ReadAll(io.LimitReader(resp.Body, 50<<20)) // 50 MB limit
+	if err != nil {
+		t.Logf("[artifacts] Could not read %s: %v", name, err)
+		return
+	}
+
+	artDir := filepath.Join(destDir, name)
+	_ = os.MkdirAll(artDir, 0o755)
+
+	zr, err := zip.NewReader(bytes.NewReader(zipData), int64(len(zipData)))
+	if err != nil {
+		// Not a zip — save raw content.
+		rawPath := filepath.Join(destDir, name+".bin")
+		_ = os.WriteFile(rawPath, zipData, 0o644)
+		t.Logf("[artifacts] %s is not a zip, saved raw to %s", name, rawPath)
+		return
+	}
+
+	for _, f := range zr.File {
+		outPath := filepath.Join(artDir, f.Name)
+
+		// Prevent zip slip.
+		if !strings.HasPrefix(filepath.Clean(outPath), filepath.Clean(artDir)+string(os.PathSeparator)) {
+			t.Logf("[artifacts] Skipping suspicious path in %s: %s", name, f.Name)
+			continue
+		}
+
+		if f.FileInfo().IsDir() {
+			_ = os.MkdirAll(outPath, 0o755)
+			continue
+		}
+
+		_ = os.MkdirAll(filepath.Dir(outPath), 0o755)
+		rc, err := f.Open()
+		if err != nil {
+			t.Logf("[artifacts] Could not open %s/%s: %v", name, f.Name, err)
+			continue
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			t.Logf("[artifacts] Could not read %s/%s: %v", name, f.Name, err)
+			continue
+		}
+		if err := os.WriteFile(outPath, data, 0o644); err != nil {
+			t.Logf("[artifacts] Could not write %s: %v", outPath, err)
+			continue
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "::notice::Extracted artifact %q (%d files) to %s\n", name, len(zr.File), artDir)
+	t.Logf("[artifacts] Extracted %s (%d files) to %s", name, len(zr.File), artDir)
 }
 
 // runUnenrollmentTest disables test-repo in config.yaml, runs install to
