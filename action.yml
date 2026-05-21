@@ -129,7 +129,7 @@ runs:
       shell: bash
       run: fullsend --version
 
-    - uses: astral-sh/setup-uv@v6
+    - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
 
     - name: Install OpenShell CLI
       shell: bash
@@ -143,11 +143,29 @@ runs:
       shell: bash
       env:
         OPENSHELL_VERSION: "0.0.38"
+        RUNNER_ARCH: ${{ runner.arch }}
       run: |
         set -euo pipefail
-        GATEWAY_ASSET="openshell-gateway-x86_64-unknown-linux-gnu.tar.gz"
+
+        arch="$(uname -m)"
+        case "${arch}" in
+          x86_64) ;;
+          aarch64|arm64) arch=aarch64 ;;
+          *) echo "::error::Unsupported architecture for openshell-gateway: ${arch}"; exit 1 ;;
+        esac
+
+        GATEWAY_ASSET="openshell-gateway-${arch}-unknown-linux-gnu.tar.gz"
         GATEWAY_URL="https://github.com/NVIDIA/OpenShell/releases/download/v${OPENSHELL_VERSION}/${GATEWAY_ASSET}"
-        curl -fsSL "${GATEWAY_URL}" -o "/tmp/${GATEWAY_ASSET}"
+        max_attempts=3; attempt=1; delay=5
+        while true; do
+          if curl -fsSL "${GATEWAY_URL}" -o "/tmp/${GATEWAY_ASSET}"; then break; fi
+          if (( attempt >= max_attempts )); then
+            echo "::error::Gateway download failed after ${max_attempts} attempts"
+            exit 1
+          fi
+          echo "::warning::Gateway download attempt ${attempt}/${max_attempts} failed, retrying in ${delay}s..."
+          sleep "${delay}"; (( attempt++ )); (( delay *= 3 ))
+        done
         tar xzf "/tmp/${GATEWAY_ASSET}" -C "${RUNNER_TEMP}/fullsend"
         rm -f "/tmp/${GATEWAY_ASSET}"
 
@@ -191,12 +209,13 @@ runs:
         mkdir -p "${GITHUB_WORKSPACE}/output"
 
         export OPENSHELL_SSH_HANDSHAKE_SECRET="ci-$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+        echo "::add-mask::${OPENSHELL_SSH_HANDSHAKE_SECRET}"
         # Version-tagged images start at 0.0.41; for 0.0.38 use the release commit SHA.
         # TODO: pass via --podman-supervisor-image flag when one exists (Docker driver has --docker-supervisor-image).
         export OPENSHELL_SUPERVISOR_IMAGE="ghcr.io/nvidia/openshell/supervisor:dfd47683e7da4f1a4a8fa5d77f92d3696e6a41f9"
 
         "${RUNNER_TEMP}/fullsend/openshell-gateway" \
-          --bind-address 0.0.0.0 \
+          --bind-address 127.0.0.1 \
           --health-port 8081 \
           --drivers podman \
           --disable-tls \
