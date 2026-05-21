@@ -190,6 +190,18 @@ func runAgent(agentName, fullsendDir, outputBase, targetRepo, fullsendBinary str
 	}
 	printer.Blank()
 
+	// 1b. Log token scope for debugging cross-org issues (see #1321).
+	// Non-fatal: if the check fails (e.g., non-installation token), log a
+	// warning and continue.
+	if ghToken := os.Getenv("GH_TOKEN"); ghToken != "" {
+		repos, err := fetchTokenScope(ghToken, "https://api.github.com")
+		if err != nil {
+			printer.StepWarn("Token scope check: " + err.Error())
+		} else if len(repos) > 0 {
+			printer.KeyValue("Token scoped to", strings.Join(repos, ", "))
+		}
+	}
+
 	// 2. Check openshell availability.
 	openshellStart := time.Now()
 	printer.StepStart("Checking openshell availability")
