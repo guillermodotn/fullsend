@@ -8,7 +8,6 @@ import (
 	"github.com/fullsend-ai/fullsend/internal/ui"
 )
 
-const vendoredBinaryPath = "bin/fullsend"
 
 // VendorFunc is a callback that cross-compiles and uploads a vendored binary.
 type VendorFunc func(ctx context.Context, client forge.Client, printer *ui.Printer, owner, repo string) error
@@ -66,7 +65,7 @@ func (l *VendorBinaryLayer) Install(ctx context.Context) error {
 	}
 
 	// Disabled — clean up any vendored binary left from a previous install.
-	_, err := l.client.GetFileContent(ctx, l.org, l.repo, vendoredBinaryPath)
+	_, err := l.client.GetFileContent(ctx, l.org, l.repo, VendoredBinaryPath)
 	if err != nil {
 		if forge.IsNotFound(err) {
 			return nil
@@ -75,7 +74,7 @@ func (l *VendorBinaryLayer) Install(ctx context.Context) error {
 	}
 
 	l.ui.StepStart("removing stale vendored binary")
-	if err := l.client.DeleteFile(ctx, l.org, l.repo, vendoredBinaryPath, "chore: remove vendored binary"); err != nil {
+	if err := l.client.DeleteFile(ctx, l.org, l.repo, VendoredBinaryPath, "chore: remove vendored binary"); err != nil {
 		l.ui.StepFail("failed to remove vendored binary")
 		return fmt.Errorf("deleting vendored binary: %w", err)
 	}
@@ -91,7 +90,7 @@ func (l *VendorBinaryLayer) Uninstall(_ context.Context) error { return nil }
 func (l *VendorBinaryLayer) Analyze(ctx context.Context) (*LayerReport, error) {
 	report := &LayerReport{Name: l.Name()}
 
-	_, err := l.client.GetFileContent(ctx, l.org, l.repo, vendoredBinaryPath)
+	_, err := l.client.GetFileContent(ctx, l.org, l.repo, VendoredBinaryPath)
 	if err != nil {
 		if forge.IsNotFound(err) {
 			if l.enabled {

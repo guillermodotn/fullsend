@@ -808,7 +808,10 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 		}
 		if vendorBinary {
 			printer.Blank()
-			printer.StepInfo("Would cross-compile and upload vendored binary to .fullsend/bin/fullsend")
+			printer.StepInfo(fmt.Sprintf("Would cross-compile and upload vendored binary to %s", layers.VendoredBinaryPathPerRepo))
+		} else {
+			printer.Blank()
+			printer.StepInfo(fmt.Sprintf("Would remove stale vendored binary at %s (if present)", layers.VendoredBinaryPathPerRepo))
 		}
 		return nil
 	}
@@ -986,6 +989,19 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 		if err := vendorFullsendBinary(ctx, client, printer, owner, repo); err != nil {
 			return fmt.Errorf("vendoring binary: %w", err)
 		}
+	} else {
+		// Clean up any vendored binary left from a previous install.
+		_, err := client.GetFileContent(ctx, owner, repo, layers.VendoredBinaryPathPerRepo)
+		if err == nil {
+			printer.StepStart("Removing stale vendored binary")
+			if err := client.DeleteFile(ctx, owner, repo, layers.VendoredBinaryPathPerRepo, "chore: remove vendored binary"); err != nil {
+				printer.StepFail("Failed to remove vendored binary")
+				return fmt.Errorf("deleting vendored binary: %w", err)
+			}
+			printer.StepDone("Removed stale vendored binary")
+		} else if !forge.IsNotFound(err) {
+			return fmt.Errorf("checking for vendored binary: %w", err)
+		}
 	}
 
 	printer.Blank()
@@ -994,8 +1010,15 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 }
 
 // vendorFullsendBinary cross-compiles the fullsend binary for linux/amd64
-// and uploads it to .fullsend/bin/fullsend via layers.VendorBinary.
+// and uploads it via layers.VendorBinary. Per-org mode uploads to bin/fullsend
+// in the .fullsend config repo; per-repo mode uploads to .fullsend/bin/fullsend
+// in the target repo.
 func vendorFullsendBinary(ctx context.Context, client forge.Client, printer *ui.Printer, owner, repo string) error {
+	destPath := layers.VendoredBinaryPath
+	if repo != forge.ConfigRepoName {
+		destPath = layers.VendoredBinaryPathPerRepo
+	}
+
 	printer.StepStart("Cross-compiling fullsend for linux/amd64")
 
 	tmpBinary, err := os.CreateTemp("", "fullsend-linux-amd64-*")
@@ -1018,8 +1041,8 @@ func vendorFullsendBinary(ctx context.Context, client forge.Client, printer *ui.
 	}
 	printer.StepDone("Cross-compiled fullsend for linux/amd64")
 
-	printer.StepStart("Uploading vendored binary to .fullsend/bin/fullsend")
-	if err := layers.VendorBinary(ctx, client, owner, repo, tmpBinary.Name()); err != nil {
+	printer.StepStart(fmt.Sprintf("Uploading vendored binary to %s", destPath))
+	if err := layers.VendorBinary(ctx, client, owner, repo, destPath, tmpBinary.Name()); err != nil {
 		printer.StepFail("Failed to upload vendored binary")
 		return err
 	}
