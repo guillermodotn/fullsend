@@ -8,7 +8,6 @@ import (
 	"github.com/fullsend-ai/fullsend/internal/ui"
 )
 
-
 // VendorFunc is a callback that cross-compiles and uploads a vendored binary.
 type VendorFunc func(ctx context.Context, client forge.Client, printer *ui.Printer, owner, repo string) error
 
@@ -44,6 +43,15 @@ func NewVendorBinaryLayer(org, repo string, client forge.Client, printer *ui.Pri
 
 func (l *VendorBinaryLayer) Name() string { return "vendor-binary" }
 
+// binaryPath returns the upload path for the vendored binary based on the
+// target repo: per-org uses bin/fullsend, per-repo uses .fullsend/bin/fullsend.
+func (l *VendorBinaryLayer) binaryPath() string {
+	if l.repo != forge.ConfigRepoName {
+		return VendoredBinaryPathPerRepo
+	}
+	return VendoredBinaryPath
+}
+
 // RequiredScopes returns the scopes needed for the given operation.
 func (l *VendorBinaryLayer) RequiredScopes(op Operation) []string {
 	switch op {
@@ -65,7 +73,8 @@ func (l *VendorBinaryLayer) Install(ctx context.Context) error {
 	}
 
 	// Disabled — clean up any vendored binary left from a previous install.
-	_, err := l.client.GetFileContent(ctx, l.org, l.repo, VendoredBinaryPath)
+	path := l.binaryPath()
+	_, err := l.client.GetFileContent(ctx, l.org, l.repo, path)
 	if err != nil {
 		if forge.IsNotFound(err) {
 			return nil
@@ -74,7 +83,7 @@ func (l *VendorBinaryLayer) Install(ctx context.Context) error {
 	}
 
 	l.ui.StepStart("removing stale vendored binary")
-	if err := l.client.DeleteFile(ctx, l.org, l.repo, VendoredBinaryPath, "chore: remove vendored binary"); err != nil {
+	if err := l.client.DeleteFile(ctx, l.org, l.repo, path, "chore: remove vendored binary"); err != nil {
 		l.ui.StepFail("failed to remove vendored binary")
 		return fmt.Errorf("deleting vendored binary: %w", err)
 	}
@@ -90,7 +99,7 @@ func (l *VendorBinaryLayer) Uninstall(_ context.Context) error { return nil }
 func (l *VendorBinaryLayer) Analyze(ctx context.Context) (*LayerReport, error) {
 	report := &LayerReport{Name: l.Name()}
 
-	_, err := l.client.GetFileContent(ctx, l.org, l.repo, VendoredBinaryPath)
+	_, err := l.client.GetFileContent(ctx, l.org, l.repo, l.binaryPath())
 	if err != nil {
 		if forge.IsNotFound(err) {
 			if l.enabled {
