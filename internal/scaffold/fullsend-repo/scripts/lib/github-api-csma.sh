@@ -45,6 +45,10 @@ _github_csma_backoff_cap_sec() {
   echo "${GITHUB_CSMA_BACKOFF_CAP_SEC:-120}"
 }
 
+_github_csma_emit_failure() {
+  printf '%s\n' "$1" >&2
+}
+
 # Wait until the named rate_limit resource has enough quota (carrier sense).
 # Usage: github_csma_sense [core|graphql] [min_remaining]
 github_csma_sense() {
@@ -96,8 +100,7 @@ github_csma_slot() {
   fi
   span_ms=$(( max_ms - min_ms + 1 ))
   delay_ms=$(( min_ms + RANDOM % span_ms ))
-  # shellcheck disable=SC2086
-  sleep "$(awk "BEGIN { printf \"%.3f\", ${delay_ms} / 1000 }")"
+  sleep "$(awk -v ms="${delay_ms}" 'BEGIN { printf "%.3f", ms / 1000 }')"
 }
 
 # Return 0 if combined output looks like a retryable GitHub rate limit error.
@@ -106,7 +109,7 @@ github_csma_is_rate_limit() {
   local lower
   lower=$(echo "${text}" | tr '[:upper:]' '[:lower:]')
 
-  if echo "${lower}" | grep -qE 'http 429|status: 429|\b429\b'; then
+  if echo "${lower}" | grep -qE 'http 429|status: 429'; then
     return 0
   fi
   if echo "${lower}" | grep -qE 'secondary rate limit|rate limit exceeded|api rate limit'; then
@@ -123,17 +126,13 @@ github_csma_is_rate_limit() {
 # Compute backoff seconds for attempt (0-based). Writes to stdout.
 github_csma_backoff() {
   local attempt="$1"
-  local cap base delay jitter
+  local cap base delay
   cap=$(_github_csma_backoff_cap_sec)
   base=$(( 1 << attempt ))
   if (( base > cap )); then
     base="${cap}"
   fi
-  jitter=$(( RANDOM % (base + 1) ))
-  delay=$(( base + jitter ))
-  if (( delay > cap )); then
-    delay="${cap}"
-  fi
+  delay=$(( RANDOM % (base + 1) ))
   if (( delay < 1 )); then
     delay=1
   fi
@@ -142,28 +141,26 @@ github_csma_backoff() {
 
 _github_csma_sleep_after_rate_limit() {
   local attempt="$1"
-  local combined="$2"
-  local delay reset now wait_secs info resource
+  local resource="${2:-core}"
+  local delay wait_secs now reset info cap
 
   delay=$(github_csma_backoff "${attempt}")
-  echo "GitHub API rate limit (attempt $(( attempt + 1 ))); backing off ${delay}s..." >&2
-  sleep "${delay}"
-
-  # If rate_limit reset is later than backoff, wait for reset too.
   if info=$(gh api rate_limit 2>/dev/null); then
     now=$(date +%s)
-    for resource in core graphql; do
-      reset=$(echo "${info}" | jq -r --arg r "${resource}" '.resources[$r].reset // empty')
-      if [[ -n "${reset}" && "${reset}" != "null" ]]; then
-        wait_secs=$(( reset - now + 1 ))
-        if (( wait_secs > delay && wait_secs > 0 && wait_secs <= $(_github_csma_backoff_cap_sec) )); then
-          echo "Extending wait for ${resource} reset (${wait_secs}s)..." >&2
-          sleep "${wait_secs}"
-          return 0
-        fi
+    reset=$(echo "${info}" | jq -r --arg r "${resource}" '.resources[$r].reset // empty')
+    if [[ -n "${reset}" && "${reset}" != "null" ]]; then
+      wait_secs=$(( reset - now + 1 ))
+      cap=$(_github_csma_backoff_cap_sec)
+      if (( wait_secs > cap )); then
+        wait_secs="${cap}"
       fi
-    done
+      if (( wait_secs > delay && wait_secs > 0 )); then
+        delay="${wait_secs}"
+      fi
+    fi
   fi
+  echo "GitHub API rate limit (attempt $(( attempt + 1 ))); backing off ${delay}s..." >&2
+  sleep "${delay}"
 }
 
 # Run gh with CSMA/CD. First argument: rate_limit resource (core|graphql).
@@ -193,12 +190,12 @@ github_csma_run() {
     combined=$(cat "${outfile}" "${errfile}")
     if github_csma_is_rate_limit "${combined}"; then
       if (( attempt < max_attempts - 1 )); then
-        _github_csma_sleep_after_rate_limit "${attempt}" "${combined}"
+        _github_csma_sleep_after_rate_limit "${attempt}" "${resource}"
         continue
       fi
     fi
 
-    cat "${combined}" >&2
+    _github_csma_emit_failure "${combined}"
     return 1
   done
 
@@ -234,12 +231,12 @@ github_csma_run_pipe() {
     combined=$(cat "${outfile}" "${errfile}")
     if github_csma_is_rate_limit "${combined}"; then
       if (( attempt < max_attempts - 1 )); then
-        _github_csma_sleep_after_rate_limit "${attempt}" "${combined}"
+        _github_csma_sleep_after_rate_limit "${attempt}" "${resource}"
         continue
       fi
     fi
 
-    cat "${combined}" >&2
+    _github_csma_emit_failure "${combined}"
     return 1
   done
 
@@ -247,7 +244,11 @@ github_csma_run_pipe() {
 }
 
 # Run an arbitrary command with stdin from caller; retries on rate-limit errors in output.
+# First argument: rate_limit resource (core|graphql); remaining args are the command.
 github_csma_run_cmd() {
+  local resource="${1:-core}"
+  shift
+
   local max_attempts attempt infile outfile errfile combined
   max_attempts=$(_github_csma_max_attempts)
   infile=$(mktemp)
@@ -258,7 +259,7 @@ github_csma_run_cmd() {
   trap "rm -f '${infile}' '${outfile}' '${errfile}'" RETURN
 
   for (( attempt = 0; attempt < max_attempts; attempt++ )); do
-    github_csma_sense core
+    github_csma_sense "${resource}"
     github_csma_slot
 
     : >"${outfile}"
@@ -271,12 +272,12 @@ github_csma_run_cmd() {
     combined=$(cat "${outfile}" "${errfile}")
     if github_csma_is_rate_limit "${combined}"; then
       if (( attempt < max_attempts - 1 )); then
-        _github_csma_sleep_after_rate_limit "${attempt}" "${combined}"
+        _github_csma_sleep_after_rate_limit "${attempt}" "${resource}"
         continue
       fi
     fi
 
-    cat "${combined}" >&2
+    _github_csma_emit_failure "${combined}"
     return 1
   done
 
