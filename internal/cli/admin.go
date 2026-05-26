@@ -519,7 +519,7 @@ Inference authentication:
 	cmd.Flags().StringVar(&agents, "agents", strings.Join(config.DefaultAgentRoles(), ","), "comma-separated agent roles")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview changes without making them")
 	cmd.Flags().BoolVar(&skipAppSetup, "skip-app-setup", false, "skip GitHub App creation/setup")
-	cmd.Flags().BoolVar(&vendorBinary, "vendor-fullsend-binary", false, "cross-compile and upload the fullsend binary into .fullsend/bin/ for development iteration")
+	cmd.Flags().BoolVar(&vendorBinary, "vendor-fullsend-binary", false, "cross-compile and vendor the fullsend binary for development iteration")
 	cmd.Flags().BoolVar(&enrollAllFlag, "enroll-all", false, "enroll all repositories without prompting")
 	cmd.Flags().BoolVar(&enrollNoneFlag, "enroll-none", false, "skip repository enrollment without prompting")
 	cmd.Flags().StringVar(&inferenceProject, "inference-project", "", "GCP project ID for inference (Agent Platform)")
@@ -991,14 +991,15 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 		}
 	} else {
 		// Clean up any vendored binary left from a previous install.
+		// Mirrors VendorBinaryLayer.Install cleanup logic for per-org mode.
 		_, err := client.GetFileContent(ctx, owner, repo, layers.VendoredBinaryPathPerRepo)
 		if err == nil {
-			printer.StepStart("Removing stale vendored binary")
+			printer.StepStart("removing stale vendored binary")
 			if err := client.DeleteFile(ctx, owner, repo, layers.VendoredBinaryPathPerRepo, "chore: remove vendored binary"); err != nil {
-				printer.StepFail("Failed to remove vendored binary")
+				printer.StepFail("failed to remove vendored binary")
 				return fmt.Errorf("deleting vendored binary: %w", err)
 			}
-			printer.StepDone("Removed stale vendored binary")
+			printer.StepDone("removed stale vendored binary")
 		} else if !forge.IsNotFound(err) {
 			return fmt.Errorf("checking for vendored binary: %w", err)
 		}

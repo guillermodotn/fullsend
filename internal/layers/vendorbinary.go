@@ -11,7 +11,7 @@ import (
 // VendorFunc is a callback that cross-compiles and uploads a vendored binary.
 type VendorFunc func(ctx context.Context, client forge.Client, printer *ui.Printer, owner, repo string) error
 
-// VendorBinaryLayer manages the vendored development binary in .fullsend/bin/.
+// VendorBinaryLayer manages the vendored development binary.
 //
 // When enabled (--vendor-fullsend-binary flag), it calls a VendorFunc callback
 // to cross-compile and upload the binary. When disabled (the default), it
@@ -91,8 +91,9 @@ func (l *VendorBinaryLayer) Install(ctx context.Context) error {
 	return nil
 }
 
-// Uninstall is a no-op. The vendored binary is removed when the config repo
-// is deleted by the ConfigRepoLayer.
+// Uninstall is a no-op. In per-org mode the vendored binary is removed when
+// the config repo is deleted by ConfigRepoLayer. In per-repo mode the binary
+// lives in the target repo and is cleaned up on re-install with vendor disabled.
 func (l *VendorBinaryLayer) Uninstall(_ context.Context) error { return nil }
 
 // Analyze assesses the current state of the vendored binary.

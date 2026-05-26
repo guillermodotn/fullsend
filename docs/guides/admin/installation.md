@@ -122,7 +122,7 @@ The installer automatically provisions [Workload Identity Federation (WIF)](http
 | `--skip-mint-check` | `false` | Skip mint validation, GCP provisioning, and app setup; requires `--mint-url` |
 | `--enroll-all` | `false` | Enroll all repositories without prompting (per-org only) |
 | `--enroll-none` | `false` | Skip repository enrollment without prompting (per-org only) |
-| `--vendor-fullsend-binary` | `false` | Cross-compile and upload the fullsend binary into `.fullsend/bin/` for development iteration |
+| `--vendor-fullsend-binary` | `false` | Cross-compile and vendor the fullsend binary for development iteration |
 
 The `--skip-mint-check` flag bypasses all mint validation, GCP provisioning, and app setup. It requires `--mint-url` to be set and only validates that the URL uses HTTPS. This is useful when the mint infrastructure is managed externally or you want to skip GCP API calls entirely.
 
