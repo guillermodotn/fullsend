@@ -180,6 +180,9 @@ func TestLiveGCFClient_CreateWIFProvider(t *testing.T) {
 				// enableWIFProvider — re-enables the provider after conflict recovery.
 				assert.Equal(t, http.MethodPatch, r.Method)
 				assert.Contains(t, r.URL.RawQuery, "disabled")
+				var body map[string]interface{}
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+				assert.Equal(t, false, body["disabled"], "expected disabled=false in enable call")
 				w.WriteHeader(http.StatusOK)
 				fmt.Fprintln(w, `{"name":"operations/enable-op","done":true}`)
 			}
