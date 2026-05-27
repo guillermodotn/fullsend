@@ -168,8 +168,11 @@ func isRetryable(resp *http.Response) (bool, []byte) {
 			return true, nil
 		}
 		// Check body for secondary rate limit without Retry-After header.
-		data, _ := io.ReadAll(resp.Body)
-		if strings.Contains(string(data), "secondary rate limit") {
+		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<16)) // 64KB max
+		if readErr != nil {
+			return false, nil
+		}
+		if strings.Contains(strings.ToLower(string(data)), "secondary rate limit") {
 			return true, nil
 		}
 		// Not a rate limit — return the body so the caller can still use it.
@@ -187,7 +190,7 @@ var secondaryRateLimitBackoff = 60 * time.Second
 // It uses the Retry-After header if present, otherwise exponential backoff.
 func retryDelay(resp *http.Response, attempt int) time.Duration {
 	if ra := resp.Header.Get("Retry-After"); ra != "" {
-		if secs, err := strconv.Atoi(ra); err == nil {
+		if secs, err := strconv.Atoi(ra); err == nil && secs > 0 && secs <= 300 {
 			return time.Duration(secs) * time.Second
 		}
 	}

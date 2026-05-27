@@ -198,8 +198,11 @@ func tryReclaimStaleLock(ctx context.Context, client forge.Client, token, org, r
 	}
 	logf("[org-pool] %s lock is stale (age: %s > %s), deleting stale lock repo", org, age.Round(time.Second), staleLockTimeout)
 	if delErr := client.DeleteRepo(ctx, org, lockRepo); delErr != nil {
-		logf("[org-pool] Warning: failed to delete stale lock repo %s/%s: %v", org, lockRepo, delErr)
-		return false
+		if !forge.IsNotFound(delErr) {
+			logf("[org-pool] Warning: failed to delete stale lock repo %s/%s: %v", org, lockRepo, delErr)
+			return false
+		}
+		logf("[org-pool] Stale lock repo %s/%s already deleted", org, lockRepo)
 	}
 	logf("[org-pool] Stale lock repo %s/%s deleted, attempting re-creation", org, lockRepo)
 	acquired, err := tryCreateLock(ctx, client, org, runID, logf)
