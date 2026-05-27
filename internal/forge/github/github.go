@@ -117,12 +117,18 @@ func (c *LiveClient) do(ctx context.Context, method, path string, body any) (*ht
 			return nil, fmt.Errorf("http %s %s: %w", method, path, err)
 		}
 
-		if !isRetryable(resp) {
+		retryable, respBody := isRetryable(resp)
+		if !retryable {
+			if respBody != nil {
+				// We read the body to check for secondary rate limit;
+				// replace it so callers can still read it.
+				resp.Body.Close()
+				resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			}
 			return resp, nil
 		}
 
-		// Drain and close the body before retrying.
-		io.Copy(io.Discard, resp.Body)
+		// Body already read or drained by isRetryable.
 		resp.Body.Close()
 
 		if attempt == maxRetries-1 {
@@ -142,18 +148,34 @@ func (c *LiveClient) do(ctx context.Context, method, path string, body any) (*ht
 }
 
 // isRetryable returns true for responses that should trigger a retry.
-// GitHub uses 429 for primary rate limits and 403 with Retry-After for
-// secondary rate limits. A plain 403 (e.g., permission denied) is not retried.
-func isRetryable(resp *http.Response) bool {
+// GitHub uses 429 for primary rate limits and 403 for secondary rate limits.
+// Secondary rate limits may include a Retry-After header, or may only be
+// identifiable by the response body containing "secondary rate limit".
+func isRetryable(resp *http.Response) (bool, []byte) {
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return true
+		io.Copy(io.Discard, resp.Body)
+		return true, nil
 	}
-	// GitHub secondary rate limit: 403 + Retry-After header.
-	if resp.StatusCode == http.StatusForbidden && resp.Header.Get("Retry-After") != "" {
-		return true
+	if resp.StatusCode == http.StatusForbidden {
+		if resp.Header.Get("Retry-After") != "" {
+			io.Copy(io.Discard, resp.Body)
+			return true, nil
+		}
+		// Check body for secondary rate limit without Retry-After header.
+		data, _ := io.ReadAll(resp.Body)
+		if strings.Contains(string(data), "secondary rate limit") {
+			return true, nil
+		}
+		// Not a rate limit — return the body so the caller can still use it.
+		return false, data
 	}
-	return false
+	return false, nil
 }
+
+// secondaryRateLimitBackoff is the minimum backoff for secondary rate limits
+// when no Retry-After header is present. GitHub's secondary rate limits
+// typically require waiting at least 60 seconds.
+var secondaryRateLimitBackoff = 60 * time.Second
 
 // retryDelay calculates how long to wait before retrying.
 // It uses the Retry-After header if present, otherwise exponential backoff.
@@ -162,6 +184,10 @@ func retryDelay(resp *http.Response, attempt int) time.Duration {
 		if secs, err := strconv.Atoi(ra); err == nil {
 			return time.Duration(secs) * time.Second
 		}
+	}
+	// For secondary rate limits (403), use a longer backoff.
+	if resp.StatusCode == http.StatusForbidden {
+		return secondaryRateLimitBackoff + time.Duration(math.Pow(2, float64(attempt)))*time.Second
 	}
 	// Exponential backoff: 1s, 2s, 4s
 	return time.Duration(math.Pow(2, float64(attempt))) * time.Second
