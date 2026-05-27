@@ -63,10 +63,6 @@ type githubSetupConfig struct {
 	dryRun              bool
 }
 
-// githubSetupPerOrgOnlyFlags are flags that only apply to per-org mode.
-var githubSetupPerOrgOnlyFlags = []string{
-	"vendor-fullsend-binary", "enroll-all", "enroll-none",
-}
 
 func newGitHubSetupCmd() *cobra.Command {
 	var cfg githubSetupConfig
@@ -104,7 +100,7 @@ values (mint URL, WIF provider, project ID) are provided as flags.`,
 
 			_, _, isRepo := parseTarget(cfg.target)
 			if isRepo {
-				for _, name := range githubSetupPerOrgOnlyFlags {
+				for _, name := range perOrgOnlyFlags {
 					if cmd.Flags().Changed(name) {
 						return fmt.Errorf("--%s is only valid for per-org setup (fullsend github setup <org>)", name)
 					}
@@ -760,8 +756,15 @@ func newGitHubUninstallCmd() *cobra.Command {
 				return fmt.Errorf("invalid --app-set: %w", err)
 			}
 
+			token, err := resolveToken()
+			if err != nil {
+				return err
+			}
+
+			client := gh.New(token)
+			printer := ui.New(os.Stdout)
+
 			if !yolo {
-				printer := ui.New(os.Stdout)
 				printer.StepWarn(fmt.Sprintf("This will permanently delete the %s repo and all stored secrets for %s.", forge.ConfigRepoName, org))
 				printer.StepInfo(fmt.Sprintf("Type the organization name (%s) to confirm:", org))
 				var confirmation string
@@ -772,14 +775,6 @@ func newGitHubUninstallCmd() *cobra.Command {
 					return fmt.Errorf("confirmation did not match; aborting uninstall")
 				}
 			}
-
-			token, err := resolveToken()
-			if err != nil {
-				return err
-			}
-
-			client := gh.New(token)
-			printer := ui.New(os.Stdout)
 
 			return runGitHubUninstall(cmd.Context(), client, printer, org, appSet)
 		},
