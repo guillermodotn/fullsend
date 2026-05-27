@@ -79,8 +79,14 @@ func validateOrgName(org string) error {
 	if org == "" {
 		return fmt.Errorf("organization name cannot be empty")
 	}
+	if len(org) > 39 {
+		return fmt.Errorf("organization name too long (max 39 characters)")
+	}
 	if strings.HasPrefix(org, "-") || strings.HasSuffix(org, "-") {
 		return fmt.Errorf("organization name cannot start or end with a hyphen")
+	}
+	if strings.Contains(org, "--") {
+		return fmt.Errorf("organization name cannot contain consecutive hyphens")
 	}
 	for _, c := range org {
 		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-') {
@@ -103,7 +109,7 @@ var rolePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
 // perOrgOnlyFlags are flags that only apply to per-org mode.
 var perOrgOnlyFlags = []string{
-	"vendor-fullsend-binary", "enroll-all", "enroll-none",
+	"enroll-all", "enroll-none",
 }
 
 // skipMintDispatcher implements dispatch.Dispatcher for --skip-mint-check mode.
@@ -139,6 +145,7 @@ type perRepoInstallConfig struct {
 	MintSkipDeploy      bool
 	SkipMintCheck       bool
 	AppSet              string
+	VendorBinary        bool
 }
 
 // wifProviderPattern validates the full WIF provider resource name format
@@ -292,6 +299,7 @@ Inference authentication:
 					MintSkipDeploy:      mintSkipDeploy,
 					SkipMintCheck:       skipMintCheck,
 					AppSet:              appSet,
+					VendorBinary:        vendorBinary,
 				})
 			}
 
@@ -309,7 +317,7 @@ Inference authentication:
 			printer := ui.New(os.Stdout)
 			ctx := cmd.Context()
 
-			printer.Banner()
+			printer.Banner(Version())
 			printer.Blank()
 			printer.Header("Installing fullsend for " + org)
 			printer.Blank()
@@ -517,7 +525,7 @@ Inference authentication:
 	cmd.Flags().StringVar(&agents, "agents", strings.Join(config.DefaultAgentRoles(), ","), "comma-separated agent roles")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview changes without making them")
 	cmd.Flags().BoolVar(&skipAppSetup, "skip-app-setup", false, "skip GitHub App creation/setup")
-	cmd.Flags().BoolVar(&vendorBinary, "vendor-fullsend-binary", false, "cross-compile and upload the fullsend binary into .fullsend/bin/ for development iteration")
+	cmd.Flags().BoolVar(&vendorBinary, "vendor-fullsend-binary", false, "cross-compile and vendor the fullsend binary for development iteration")
 	cmd.Flags().BoolVar(&enrollAllFlag, "enroll-all", false, "enroll all repositories without prompting")
 	cmd.Flags().BoolVar(&enrollNoneFlag, "enroll-none", false, "skip repository enrollment without prompting")
 	cmd.Flags().StringVar(&inferenceProject, "inference-project", "", "GCP project ID for inference (Agent Platform)")
@@ -553,6 +561,7 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 	mintSourceDir := c.MintSourceDir
 	mintSkipDeploy := c.MintSkipDeploy
 	skipMintCheck := c.SkipMintCheck
+	vendorBinary := c.VendorBinary
 
 	if strings.Contains(repoFullName, "://") || strings.HasPrefix(repoFullName, "www.") {
 		return fmt.Errorf("expected owner/repo format, got a URL — use just the owner/repo portion (e.g. acme/widget)")
@@ -603,7 +612,7 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 	client := gh.New(token)
 	printer := ui.New(os.Stdout)
 
-	printer.Banner()
+	printer.Banner(Version())
 	printer.Blank()
 	printer.Header("Installing per-repo fullsend for " + repoFullName)
 	printer.Blank()
@@ -803,6 +812,13 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 		for _, name := range secretNames {
 			printer.StepInfo(fmt.Sprintf("  %s", name))
 		}
+		if vendorBinary {
+			printer.Blank()
+			printer.StepInfo(fmt.Sprintf("Would cross-compile and upload vendored binary to %s", layers.VendoredBinaryPathPerRepo))
+		} else {
+			printer.Blank()
+			printer.StepInfo(fmt.Sprintf("Would remove stale vendored binary at %s (if present)", layers.VendoredBinaryPathPerRepo))
+		}
 		return nil
 	}
 
@@ -975,14 +991,41 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 	}
 	printer.StepDone(fmt.Sprintf("Set %d repository secrets", len(repoSecrets)))
 
+	if vendorBinary {
+		if err := vendorFullsendBinary(ctx, client, printer, owner, repo); err != nil {
+			return fmt.Errorf("vendoring binary: %w", err)
+		}
+	} else {
+		// Clean up any vendored binary left from a previous install.
+		// Mirrors VendorBinaryLayer.Install cleanup logic for per-org mode.
+		_, err := client.GetFileContent(ctx, owner, repo, layers.VendoredBinaryPathPerRepo)
+		if err == nil {
+			printer.StepStart("removing stale vendored binary")
+			if err := client.DeleteFile(ctx, owner, repo, layers.VendoredBinaryPathPerRepo, "chore: remove vendored binary"); err != nil {
+				printer.StepFail("failed to remove vendored binary")
+				return fmt.Errorf("deleting vendored binary: %w", err)
+			}
+			printer.StepDone("removed stale vendored binary")
+		} else if !forge.IsNotFound(err) {
+			return fmt.Errorf("checking for vendored binary: %w", err)
+		}
+	}
+
 	printer.Blank()
 	printer.StepDone(fmt.Sprintf("Per-repo installation complete for %s/%s", owner, repo))
 	return nil
 }
 
 // vendorFullsendBinary cross-compiles the fullsend binary for linux/amd64
-// and uploads it to .fullsend/bin/fullsend via layers.VendorBinary.
-func vendorFullsendBinary(ctx context.Context, client forge.Client, printer *ui.Printer, org string) error {
+// and uploads it via layers.VendorBinary. Per-org mode uploads to bin/fullsend
+// in the .fullsend config repo; per-repo mode uploads to .fullsend/bin/fullsend
+// in the target repo.
+func vendorFullsendBinary(ctx context.Context, client forge.Client, printer *ui.Printer, owner, repo string) error {
+	destPath := layers.VendoredBinaryPath
+	if repo != forge.ConfigRepoName {
+		destPath = layers.VendoredBinaryPathPerRepo
+	}
+
 	printer.StepStart("Cross-compiling fullsend for linux/amd64")
 
 	tmpBinary, err := os.CreateTemp("", "fullsend-linux-amd64-*")
@@ -1005,8 +1048,8 @@ func vendorFullsendBinary(ctx context.Context, client forge.Client, printer *ui.
 	}
 	printer.StepDone("Cross-compiled fullsend for linux/amd64")
 
-	printer.StepStart("Uploading vendored binary to .fullsend/bin/fullsend")
-	if err := layers.VendorBinary(ctx, client, org, tmpBinary.Name()); err != nil {
+	printer.StepStart(fmt.Sprintf("Uploading vendored binary to %s", destPath))
+	if err := layers.VendorBinary(ctx, client, owner, repo, destPath, tmpBinary.Name()); err != nil {
 		printer.StepFail("Failed to upload vendored binary")
 		return err
 	}
@@ -1048,7 +1091,7 @@ func newUninstallCmd() *cobra.Command {
 			printer := ui.New(os.Stdout)
 			ctx := cmd.Context()
 
-			printer.Banner()
+			printer.Banner(Version())
 			printer.Blank()
 			printer.Header("Uninstalling fullsend from " + org)
 			printer.Blank()
@@ -1096,7 +1139,7 @@ func newAnalyzeCmd() *cobra.Command {
 			printer := ui.New(os.Stdout)
 			ctx := cmd.Context()
 
-			printer.Banner()
+			printer.Banner(Version())
 			printer.Blank()
 			printer.Header("Analyzing fullsend installation for " + org)
 			printer.Blank()
@@ -1582,9 +1625,19 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 		}
 	}
 	if len(agentSlugs) == 0 {
-		// Config unavailable — assume default app naming convention.
+		// Config unavailable — assume default app naming convention and
+		// also include any legacy app-set prefixes so that apps created
+		// under an older version are not silently skipped.
 		for _, role := range config.DefaultAgentRoles() {
 			agentSlugs = append(agentSlugs, appsetup.AppSlug(appSet, role))
+		}
+		for _, legacy := range appsetup.LegacyAppSets {
+			if legacy == appSet {
+				continue // already included above
+			}
+			for _, role := range config.DefaultAgentRoles() {
+				agentSlugs = append(agentSlugs, appsetup.AppSlug(legacy, role))
+			}
 		}
 		if err != nil {
 			printer.StepInfo("Config repo unavailable; using default app names")
@@ -1674,6 +1727,9 @@ func runUninstall(ctx context.Context, client forge.Client, printer *ui.Printer,
 				}
 			}
 			printer.Blank()
+		} else if listErr == nil {
+			printer.StepWarn("No fullsend apps found installed in this organization.")
+			printer.StepInfo("If apps were created under a custom --app-set prefix, re-run with that prefix.")
 		}
 	}
 
@@ -1771,7 +1827,7 @@ func buildLayerStack(
 	return layers.NewStack(
 		layers.NewConfigRepoLayer(org, client, cfg, printer, privateRepo),
 		layers.NewWorkflowsLayer(org, client, printer, user),
-		layers.NewVendorBinaryLayer(org, client, printer, vendorBinary, vendorFn),
+		layers.NewVendorBinaryLayer(org, forge.ConfigRepoName, client, printer, vendorBinary, vendorFn),
 		layers.NewSecretsLayer(org, client, agentCreds, printer).WithOIDCMode(),
 		layers.NewInferenceLayer(org, client, inferenceProvider, printer),
 		dispatchLayer,
@@ -2077,7 +2133,7 @@ func newDisableReposCmd() *cobra.Command {
 // The yolo parameter is accepted for signature compatibility with reposRunFunc but is unused
 // since enable has no destructive operations that require confirmation.
 func runEnableRepos(ctx context.Context, client forge.Client, printer *ui.Printer, org string, repos []string, all bool, yolo bool) error {
-	printer.Banner()
+	printer.Banner(Version())
 	printer.Blank()
 	printer.Header("Enabling repositories for " + org)
 	printer.Blank()
@@ -2255,7 +2311,7 @@ func syncOrgVariableVisibility(ctx context.Context, client forge.Client, printer
 
 // runDisableRepos disables the specified repositories from fullsend enrollment.
 func runDisableRepos(ctx context.Context, client forge.Client, printer *ui.Printer, org string, repos []string, all bool, yolo bool) error {
-	printer.Banner()
+	printer.Banner(Version())
 	printer.Blank()
 	printer.Header("Disabling repositories for " + org)
 	printer.Blank()
