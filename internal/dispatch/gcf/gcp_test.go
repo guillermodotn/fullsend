@@ -1345,6 +1345,61 @@ func TestLiveGCFClient_DisableSecretVersion(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unexpected status 403 disabling")
 	})
+
+	t.Run("empty_version_name", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]string{"name": ""})
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).DisableSecretVersion(context.Background(), "proj", "secret")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "does not match expected pattern")
+	})
+
+	t.Run("malformed_version_name", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]string{"name": "../../evil/path"})
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).DisableSecretVersion(context.Background(), "proj", "secret")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "does not match expected pattern")
+	})
+
+	t.Run("decode_failure", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintln(w, "not json")
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).DisableSecretVersion(context.Background(), "proj", "secret")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "decoding secret version metadata")
+	})
+
+	t.Run("post_404_idempotent", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			callCount++
+			if callCount == 1 {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]string{
+					"name": "projects/123/secrets/s/versions/2",
+				})
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).DisableSecretVersion(context.Background(), "proj", "secret")
+		require.NoError(t, err)
+	})
 }
 
 // --- DeleteSecret ---

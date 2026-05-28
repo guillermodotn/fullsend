@@ -25,6 +25,10 @@ var operationNamePattern = regexp.MustCompile(`^[a-zA-Z0-9/_-]+$`)
 // "projects/{project}/secrets/{secret}".
 var secretResourcePattern = regexp.MustCompile(`^projects/[a-z][a-z0-9-]+/secrets/[a-zA-Z0-9_-]+$`)
 
+// secretVersionPattern validates Secret Manager version resource paths like
+// "projects/{project_number}/secrets/{secret}/versions/{version_number}".
+var secretVersionPattern = regexp.MustCompile(`^projects/[0-9]+/secrets/[a-zA-Z0-9_-]+/versions/[0-9]+$`)
+
 // ErrSecretNotFound is returned when a Secret Manager secret does not exist.
 var ErrSecretNotFound = errors.New("secret not found")
 
@@ -471,8 +475,8 @@ func (c *LiveGCFClient) DisableSecretVersion(ctx context.Context, projectID, sec
 	if err := json.NewDecoder(io.LimitReader(getResp.Body, 1<<20)).Decode(&version); err != nil {
 		return fmt.Errorf("decoding secret version metadata: %w", err)
 	}
-	if version.Name == "" {
-		return fmt.Errorf("secret version metadata has empty name")
+	if !secretVersionPattern.MatchString(version.Name) {
+		return fmt.Errorf("secret version name %q does not match expected pattern", version.Name)
 	}
 
 	// Disable the resolved version.
@@ -484,6 +488,9 @@ func (c *LiveGCFClient) DisableSecretVersion(ctx context.Context, projectID, sec
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return nil // Version deleted between resolve and disable; treat as success.
+	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return fmt.Errorf("unexpected status %d disabling secret version: %s", resp.StatusCode, gcp.ExtractErrorMessage(body))
