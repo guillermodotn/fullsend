@@ -799,6 +799,396 @@ func TestLiveGCFClient_UpdateFunctionEnvVars(t *testing.T) {
 	})
 }
 
+// --- UpdateServiceEnvVars ---
+
+func TestLiveGCFClient_UpdateServiceEnvVars(t *testing.T) {
+	t.Run("success_immediate", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			if callCount == 1 {
+				// GET current service
+				assert.Equal(t, http.MethodGet, r.Method)
+				assert.Contains(t, r.URL.Path, "/services/my-svc")
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"template": map[string]interface{}{
+						"revision": "my-svc-00042-abc",
+						"containers": []interface{}{
+							map[string]interface{}{
+								"image": "gcr.io/proj/mint:latest",
+								"env":   []interface{}{},
+							},
+						},
+					},
+				})
+				return
+			}
+			// PATCH with updated env
+			assert.Equal(t, http.MethodPatch, r.Method)
+			assert.Contains(t, r.URL.RawQuery, "updateMask=template.revision,template.containers")
+
+			var body map[string]interface{}
+			json.NewDecoder(r.Body).Decode(&body)
+			tmpl := body["template"].(map[string]interface{})
+			_, hasRevision := tmpl["revision"]
+			assert.False(t, hasRevision, "revision should be stripped to avoid 409 conflict")
+			containers := tmpl["containers"].([]interface{})
+			container := containers[0].(map[string]interface{})
+			envs := container["env"].([]interface{})
+			assert.Len(t, envs, 1)
+			env := envs[0].(map[string]interface{})
+			assert.Equal(t, "ALLOWED_ORGS", env["name"])
+			assert.Equal(t, "org1", env["value"])
+
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{"done": true})
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
+			"ALLOWED_ORGS": "org1",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 2, callCount)
+	})
+
+	t.Run("success_with_polling", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			if callCount == 1 {
+				// GET service
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"template": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{"image": "img", "env": []interface{}{}},
+						},
+					},
+				})
+				return
+			}
+			if callCount == 2 {
+				// PATCH returns pending operation
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"name": "projects/proj/locations/us-central1/operations/op-123",
+					"done": false,
+				})
+				return
+			}
+			// Poll returns done
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{"done": true})
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
+			"KEY": "val",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 3, callCount)
+	})
+
+	t.Run("get_failure", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprintln(w, `{"error":{"message":"service not found"}}`)
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected status 404")
+	})
+
+	t.Run("patch_failure", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			callCount++
+			if callCount == 1 {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"template": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{"image": "img", "env": []interface{}{}},
+						},
+					},
+				})
+				return
+			}
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprintln(w, `{"error":{"message":"permission denied"}}`)
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected status 403")
+	})
+
+	t.Run("no_containers", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"template": map[string]interface{}{
+					"containers": []interface{}{},
+				},
+			})
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "has no containers")
+	})
+
+	t.Run("operation_error", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			callCount++
+			if callCount == 1 {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"template": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{"image": "img", "env": []interface{}{}},
+						},
+					},
+				})
+				return
+			}
+			// PATCH returns done with error
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"done":  true,
+				"error": map[string]string{"message": "quota exceeded"},
+			})
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
+			"KEY": "val",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "quota exceeded")
+	})
+
+	t.Run("empty_op_name", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			callCount++
+			if callCount == 1 {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"template": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{"image": "img", "env": []interface{}{}},
+						},
+					},
+				})
+				return
+			}
+			// PATCH returns done=false with no name
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{"done": false})
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
+			"KEY": "val",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "incomplete response")
+	})
+
+	t.Run("no_template", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{})
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "has no template")
+	})
+
+	t.Run("container_not_object", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"template": map[string]interface{}{
+					"containers": []interface{}{"not-an-object"},
+				},
+			})
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "container is not an object")
+	})
+
+	t.Run("malformed_get_response", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("not json"))
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "decoding Cloud Run service")
+	})
+
+	t.Run("polling_operation_error", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			callCount++
+			if callCount == 1 {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"template": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{"image": "img", "env": []interface{}{}},
+						},
+					},
+				})
+				return
+			}
+			if callCount == 2 {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"name": "projects/proj/locations/us-central1/operations/op-456",
+					"done": false,
+				})
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"done":  true,
+				"error": map[string]string{"message": "revision deployment failed"},
+			})
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
+			"KEY": "val",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "revision deployment failed")
+	})
+
+	t.Run("invalid_operation_name", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			callCount++
+			if callCount == 1 {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"template": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{"image": "img", "env": []interface{}{}},
+						},
+					},
+				})
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"name": "../../../evil",
+				"done": false,
+			})
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
+			"KEY": "val",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid Cloud Run operation name")
+	})
+
+	t.Run("multiple_env_vars_sorted", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			if callCount == 1 {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"template": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{"image": "img", "env": []interface{}{}},
+						},
+					},
+				})
+				return
+			}
+			var body map[string]interface{}
+			json.NewDecoder(r.Body).Decode(&body)
+			tmpl := body["template"].(map[string]interface{})
+			containers := tmpl["containers"].([]interface{})
+			container := containers[0].(map[string]interface{})
+			envs := container["env"].([]interface{})
+			assert.Len(t, envs, 3)
+			assert.Equal(t, "ALPHA", envs[0].(map[string]interface{})["name"])
+			assert.Equal(t, "BETA", envs[1].(map[string]interface{})["name"])
+			assert.Equal(t, "GAMMA", envs[2].(map[string]interface{})["name"])
+
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{"done": true})
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).UpdateServiceEnvVars(context.Background(), "proj", "us-central1", "my-svc", map[string]string{
+			"GAMMA": "3",
+			"ALPHA": "1",
+			"BETA":  "2",
+		})
+		require.NoError(t, err)
+	})
+
+	t.Run("context_canceled_during_polling", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			callCount++
+			if callCount == 1 {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"template": map[string]interface{}{
+						"containers": []interface{}{
+							map[string]interface{}{"image": "img", "env": []interface{}{}},
+						},
+					},
+				})
+				return
+			}
+			if callCount == 2 {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"name": "projects/proj/locations/us-central1/operations/op-789",
+					"done": false,
+				})
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{"done": false})
+		}))
+		defer srv.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := newTestClient(srv).UpdateServiceEnvVars(ctx, "proj", "us-central1", "my-svc", map[string]string{
+			"KEY": "val",
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, context.Canceled)
+	})
+}
+
 // --- WaitForOperation ---
 
 func TestLiveGCFClient_WaitForOperation(t *testing.T) {
@@ -890,15 +1280,27 @@ func TestLiveGCFClient_GetProjectNumber(t *testing.T) {
 
 func TestLiveGCFClient_DisableSecretVersion(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
+		callCount := 0
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			if callCount == 1 {
+				assert.Equal(t, http.MethodGet, r.Method)
+				assert.Contains(t, r.URL.Path, "secrets/my-secret/versions/latest")
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]string{
+					"name": "projects/123/secrets/my-secret/versions/5",
+				})
+				return
+			}
 			assert.Equal(t, http.MethodPost, r.Method)
-			assert.Contains(t, r.URL.Path, "secrets/my-secret/versions/latest:disable")
+			assert.Contains(t, r.URL.Path, "projects/123/secrets/my-secret/versions/5:disable")
 			w.WriteHeader(http.StatusOK)
 		}))
 		defer srv.Close()
 
 		err := newTestClient(srv).DisableSecretVersion(context.Background(), "proj", "my-secret")
 		require.NoError(t, err)
+		assert.Equal(t, 2, callCount)
 	})
 
 	t.Run("not found is idempotent", func(t *testing.T) {
@@ -911,7 +1313,7 @@ func TestLiveGCFClient_DisableSecretVersion(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("error", func(t *testing.T) {
+	t.Run("resolve_error", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
 			fmt.Fprintln(w, `{"error":{"message":"permission denied"}}`)
@@ -920,7 +1322,83 @@ func TestLiveGCFClient_DisableSecretVersion(t *testing.T) {
 
 		err := newTestClient(srv).DisableSecretVersion(context.Background(), "proj", "secret")
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unexpected status 403")
+		assert.Contains(t, err.Error(), "unexpected status 403 resolving latest")
+	})
+
+	t.Run("disable_error", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			callCount++
+			if callCount == 1 {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]string{
+					"name": "projects/123/secrets/s/versions/2",
+				})
+				return
+			}
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprintln(w, `{"error":{"message":"permission denied"}}`)
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).DisableSecretVersion(context.Background(), "proj", "secret")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected status 403 disabling")
+	})
+
+	t.Run("empty_version_name", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]string{"name": ""})
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).DisableSecretVersion(context.Background(), "proj", "secret")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "does not match expected pattern")
+	})
+
+	t.Run("malformed_version_name", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]string{"name": "../../evil/path"})
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).DisableSecretVersion(context.Background(), "proj", "secret")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "does not match expected pattern")
+	})
+
+	t.Run("decode_failure", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintln(w, "not json")
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).DisableSecretVersion(context.Background(), "proj", "secret")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "decoding secret version metadata")
+	})
+
+	t.Run("post_404_idempotent", func(t *testing.T) {
+		callCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			callCount++
+			if callCount == 1 {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]string{
+					"name": "projects/123/secrets/s/versions/2",
+				})
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+
+		err := newTestClient(srv).DisableSecretVersion(context.Background(), "proj", "secret")
+		require.NoError(t, err)
 	})
 }
 
@@ -1055,4 +1533,14 @@ func TestIAMAudience(t *testing.T) {
 func TestEncodeBase64(t *testing.T) {
 	result := encodeBase64([]byte("hello"))
 	assert.Equal(t, "aGVsbG8=", result)
+}
+
+func TestNewLiveGCFClient_SetsQuotaProject(t *testing.T) {
+	c := NewLiveGCFClient("target-project")
+	assert.Equal(t, "target-project", c.Client.QuotaProject)
+}
+
+func TestNewLiveGCFClient_EmptyQuotaProject(t *testing.T) {
+	c := NewLiveGCFClient("")
+	assert.Empty(t, c.Client.QuotaProject)
 }

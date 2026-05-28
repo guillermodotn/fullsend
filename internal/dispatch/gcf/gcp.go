@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,6 +24,10 @@ var operationNamePattern = regexp.MustCompile(`^[a-zA-Z0-9/_-]+$`)
 // secretResourcePattern validates Secret Manager resource paths like
 // "projects/{project}/secrets/{secret}".
 var secretResourcePattern = regexp.MustCompile(`^projects/[a-z][a-z0-9-]+/secrets/[a-zA-Z0-9_-]+$`)
+
+// secretVersionPattern validates Secret Manager version resource paths like
+// "projects/{project_number}/secrets/{secret}/versions/{version_number}".
+var secretVersionPattern = regexp.MustCompile(`^projects/[0-9]+/secrets/[a-zA-Z0-9_-]+/versions/[0-9]+$`)
 
 // ErrSecretNotFound is returned when a Secret Manager secret does not exist.
 var ErrSecretNotFound = errors.New("secret not found")
@@ -92,6 +97,12 @@ type GCFClient interface {
 	CreateFunction(ctx context.Context, projectID, region, functionName string, cfg FunctionConfig) (string, error)
 	UpdateFunction(ctx context.Context, projectID, region, functionName string, cfg FunctionConfig) (string, error)
 	UpdateFunctionEnvVars(ctx context.Context, projectID, region, functionName string, envVars map[string]string) (string, error)
+	// UpdateServiceEnvVars updates environment variables on the underlying
+	// Cloud Run service directly, bypassing the Cloud Functions API. This
+	// avoids triggering a source rebuild — only a new revision is created
+	// reusing the existing container image. Polls the Cloud Run LRO
+	// internally and returns after the update is complete.
+	UpdateServiceEnvVars(ctx context.Context, projectID, region, serviceName string, envVars map[string]string) error
 	WaitForOperation(ctx context.Context, operationName string) error
 
 	// Project number lookup
@@ -105,11 +116,13 @@ type LiveGCFClient struct {
 	skipUploadURLCheck bool // testing only: skip googleapis.com domain validation
 }
 
-// NewLiveGCFClient creates a new LiveGCFClient.
-func NewLiveGCFClient() *LiveGCFClient {
-	return &LiveGCFClient{
-		Client: gcp.NewClient(),
-	}
+// NewLiveGCFClient creates a new LiveGCFClient. The quotaProject is
+// set as x-goog-user-project on every request so API quota is billed
+// to the target project, not the shared ADC OAuth client project.
+func NewLiveGCFClient(quotaProject string) *LiveGCFClient {
+	c := gcp.NewClient()
+	c.QuotaProject = quotaProject
+	return &LiveGCFClient{Client: c}
 }
 
 // CreateServiceAccount creates a new service account.
@@ -435,18 +448,48 @@ func (c *LiveGCFClient) AccessSecretVersion(ctx context.Context, projectID, secr
 }
 
 // DisableSecretVersion disables the latest version of a Secret Manager secret.
+// The disable API rejects the "latest" alias, so we first resolve it to a
+// numeric version via GET, then disable that version.
 func (c *LiveGCFClient) DisableSecretVersion(ctx context.Context, projectID, secretID string) error {
-	reqURL := fmt.Sprintf("https://secretmanager.googleapis.com/v1/projects/%s/secrets/%s/versions/latest:disable",
+	// Resolve "latest" to a numeric version name.
+	getURL := fmt.Sprintf("https://secretmanager.googleapis.com/v1/projects/%s/secrets/%s/versions/latest",
 		url.PathEscape(projectID), url.PathEscape(secretID))
 
-	resp, err := c.Client.DoRequest(ctx, http.MethodPost, reqURL, "{}")
+	getResp, err := c.Client.DoRequest(ctx, http.MethodGet, getURL, "")
+	if err != nil {
+		return fmt.Errorf("resolving latest secret version: %w", err)
+	}
+	defer getResp.Body.Close()
+
+	if getResp.StatusCode == http.StatusNotFound {
+		return nil // No versions to disable.
+	}
+	if getResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(getResp.Body, 1<<20))
+		return fmt.Errorf("unexpected status %d resolving latest secret version: %s", getResp.StatusCode, gcp.ExtractErrorMessage(body))
+	}
+
+	var version struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(getResp.Body, 1<<20)).Decode(&version); err != nil {
+		return fmt.Errorf("decoding secret version metadata: %w", err)
+	}
+	if !secretVersionPattern.MatchString(version.Name) {
+		return fmt.Errorf("secret version name %q does not match expected pattern", version.Name)
+	}
+
+	// Disable the resolved version.
+	disableURL := fmt.Sprintf("https://secretmanager.googleapis.com/v1/%s:disable", version.Name)
+
+	resp, err := c.Client.DoRequest(ctx, http.MethodPost, disableURL, "{}")
 	if err != nil {
 		return fmt.Errorf("disabling secret version: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil // No versions to disable.
+		return nil // Version deleted between resolve and disable; treat as success.
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -1038,6 +1081,149 @@ func (c *LiveGCFClient) UpdateFunctionEnvVars(ctx context.Context, projectID, re
 	}
 
 	return result.Name, nil
+}
+
+// UpdateServiceEnvVars updates environment variables on the underlying
+// Cloud Run service directly via the Cloud Run Admin API v2, bypassing the
+// Cloud Functions API entirely. This avoids triggering a source rebuild —
+// only a new Cloud Run revision is created reusing the existing container
+// image. The method polls the Cloud Run LRO until the update completes.
+func (c *LiveGCFClient) UpdateServiceEnvVars(ctx context.Context, projectID, region, serviceName string, envVars map[string]string) error {
+	serviceURL := fmt.Sprintf("https://run.googleapis.com/v2/projects/%s/locations/%s/services/%s",
+		url.PathEscape(projectID), url.PathEscape(region), url.PathEscape(serviceName))
+
+	// GET current service to preserve container config (image, ports, etc.).
+	getResp, err := c.Client.DoRequest(ctx, http.MethodGet, serviceURL, "")
+	if err != nil {
+		return fmt.Errorf("getting Cloud Run service: %w", err)
+	}
+	defer getResp.Body.Close()
+
+	if getResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(getResp.Body, 1<<20))
+		return fmt.Errorf("unexpected status %d getting Cloud Run service: %s", getResp.StatusCode, gcp.ExtractErrorMessage(body))
+	}
+
+	var service map[string]interface{}
+	if err := json.NewDecoder(io.LimitReader(getResp.Body, 10<<20)).Decode(&service); err != nil {
+		return fmt.Errorf("decoding Cloud Run service: %w", err)
+	}
+
+	// Build the env var array in Cloud Run format: [{name, value}, ...].
+	// Sort keys for deterministic PATCH payloads.
+	keys := make([]string, 0, len(envVars))
+	for k := range envVars {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	envArray := make([]map[string]string, 0, len(envVars))
+	for _, k := range keys {
+		envArray = append(envArray, map[string]string{"name": k, "value": envVars[k]})
+	}
+
+	// Navigate to template.containers[0] and replace its env field.
+	template, _ := service["template"].(map[string]interface{})
+	if template == nil {
+		return fmt.Errorf("Cloud Run service has no template")
+	}
+	// Remove revision name so Cloud Run auto-generates one; re-sending the
+	// existing name causes a 409 "revision already exists" conflict.
+	delete(template, "revision")
+	containers, _ := template["containers"].([]interface{})
+	if len(containers) == 0 {
+		return fmt.Errorf("Cloud Run service has no containers")
+	}
+	container, _ := containers[0].(map[string]interface{})
+	if container == nil {
+		return fmt.Errorf("Cloud Run service container is not an object")
+	}
+	container["env"] = envArray
+
+	payloadBytes, err := json.Marshal(service)
+	if err != nil {
+		return fmt.Errorf("marshaling Cloud Run service update: %w", err)
+	}
+
+	// PATCH the service with updateMask covering both template.revision (cleared
+	// so Cloud Run auto-generates a new name) and template.containers (env vars).
+	patchResp, err := c.Client.DoRequest(ctx, http.MethodPatch, serviceURL+"?updateMask=template.revision,template.containers", string(payloadBytes))
+	if err != nil {
+		return fmt.Errorf("patching Cloud Run service: %w", err)
+	}
+	defer patchResp.Body.Close()
+
+	if patchResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(patchResp.Body, 1<<20))
+		return fmt.Errorf("unexpected status %d patching Cloud Run service: %s", patchResp.StatusCode, gcp.ExtractErrorMessage(body))
+	}
+
+	var op struct {
+		Name  string `json:"name"`
+		Done  bool   `json:"done"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(io.LimitReader(patchResp.Body, 1<<20)).Decode(&op); err != nil {
+		return fmt.Errorf("decoding Cloud Run patch response: %w", err)
+	}
+
+	if op.Done {
+		if op.Error != nil {
+			return fmt.Errorf("Cloud Run service update failed: %s", op.Error.Message)
+		}
+		return nil
+	}
+	if op.Name == "" {
+		return fmt.Errorf("Cloud Run PATCH returned incomplete response: done=false with no operation name")
+	}
+
+	return c.waitForCloudRunOperation(ctx, op.Name)
+}
+
+// waitForCloudRunOperation polls a Cloud Run LRO until it completes.
+// Cloud Run operations are polled at run.googleapis.com, not
+// cloudfunctions.googleapis.com.
+func (c *LiveGCFClient) waitForCloudRunOperation(ctx context.Context, operationName string) error {
+	if !operationNamePattern.MatchString(operationName) {
+		return fmt.Errorf("invalid Cloud Run operation name format: %q", operationName)
+	}
+	reqURL := fmt.Sprintf("https://run.googleapis.com/v2/%s", operationName)
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	for {
+		resp, err := c.Client.DoRequest(ctx, http.MethodGet, reqURL, "")
+		if err != nil {
+			return fmt.Errorf("polling Cloud Run operation: %w", err)
+		}
+
+		var op struct {
+			Done  bool `json:"done"`
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&op)
+		resp.Body.Close()
+		if decodeErr != nil {
+			return fmt.Errorf("decoding Cloud Run operation status: %w", decodeErr)
+		}
+
+		if op.Done {
+			if op.Error != nil {
+				return fmt.Errorf("Cloud Run operation failed: %s", op.Error.Message)
+			}
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
 }
 
 // WaitForOperation polls a long-running operation until it completes or
