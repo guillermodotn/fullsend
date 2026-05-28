@@ -488,7 +488,7 @@ func runInferenceEnroll(cmd *cobra.Command, printer *ui.Printer, org, project, p
 
 	ctx := cmd.Context()
 
-	gcpClient := gcf.NewLiveGCFClient()
+	gcpClient := gcf.NewLiveGCFClient(project)
 	provisioner := gcf.NewProvisioner(gcf.Config{
 		ProjectID:   project,
 		GitHubOrgs:  []string{org},
@@ -596,7 +596,7 @@ func runInferenceUnenroll(cmd *cobra.Command, printer *ui.Printer, org, project,
 
 	ctx := cmd.Context()
 
-	gcpClient := gcf.NewLiveGCFClient()
+	gcpClient := gcf.NewLiveGCFClient(project)
 	provisioner := gcf.NewProvisioner(gcf.Config{
 		ProjectID:   project,
 		GitHubOrgs:  []string{org},
