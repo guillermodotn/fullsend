@@ -294,7 +294,7 @@ func runMintEnrollOrg(ctx context.Context, printer *ui.Printer, org, project, re
 		printer.StepInfo(fmt.Sprintf("  Would add %s to ALLOWED_ORGS", org))
 		printer.StepInfo(fmt.Sprintf("  Would copy PEMs from %s for %d roles", sourceOrg, len(roleList)))
 		printer.Blank()
-		printer.StepInfo("To grant Vertex AI access, run 'fullsend inference enroll' separately")
+		printer.StepInfo("To grant Agent Platform access, run 'fullsend inference provision' separately")
 		return nil
 	}
 
@@ -329,7 +329,7 @@ func runMintEnrollOrg(ctx context.Context, printer *ui.Printer, org, project, re
 		fmt.Sprintf("Organization: %s", org),
 		fmt.Sprintf("Roles: %s", strings.Join(roleList, ", ")),
 		fmt.Sprintf("Mint URL: %s", discovery.URL),
-		fmt.Sprintf("Next: fullsend inference enroll %s --project=<inference-gcp-project>", org),
+		fmt.Sprintf("Next: fullsend inference provision %s --project=<inference-gcp-project>", org),
 		fmt.Sprintf("Then: fullsend admin install %s --mint-url=%s --skip-mint-check", org, discovery.URL),
 	})
 

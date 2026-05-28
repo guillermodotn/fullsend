@@ -16,8 +16,9 @@ func TestInferenceCommand_HasSubcommands(t *testing.T) {
 	}
 	assert.True(t, names["provision"], "expected provision subcommand")
 	assert.True(t, names["status"], "expected status subcommand")
-	assert.True(t, names["enroll"], "expected enroll subcommand")
-	assert.True(t, names["unenroll"], "expected unenroll subcommand")
+	assert.True(t, names["deprovision"], "expected deprovision subcommand")
+	assert.False(t, names["enroll"], "enroll is handled by provision, not a separate subcommand")
+	assert.False(t, names["unenroll"], "unenroll replaced by deprovision")
 }
 
 func TestInferenceCommand_RegisteredInRoot(t *testing.T) {
@@ -380,25 +381,25 @@ func TestInferenceProvisionCmd_RejectsProviderInRepoMode(t *testing.T) {
 	assert.Contains(t, err.Error(), "--provider is not supported in repo-scoped mode")
 }
 
-// --- enroll tests ---
+// --- deprovision tests ---
 
-func TestInferenceEnrollCmd_RequiresArg(t *testing.T) {
+func TestInferenceDeprovisionCmd_RequiresArg(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "enroll"})
+	cmd.SetArgs([]string{"inference", "deprovision"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "accepts 1 arg(s)")
 }
 
-func TestInferenceEnrollCmd_RequiresProject(t *testing.T) {
+func TestInferenceDeprovisionCmd_RequiresProject(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "enroll", "acme"})
+	cmd.SetArgs([]string{"inference", "deprovision", "acme"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--project is required")
 }
 
-func TestInferenceEnrollCmd_RejectsInvalidProjectID(t *testing.T) {
+func TestInferenceDeprovisionCmd_RejectsInvalidProjectID(t *testing.T) {
 	tests := []struct {
 		name    string
 		project string
@@ -411,7 +412,7 @@ func TestInferenceEnrollCmd_RejectsInvalidProjectID(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			cmd := newRootCmd()
-			cmd.SetArgs([]string{"inference", "enroll", "acme",
+			cmd.SetArgs([]string{"inference", "deprovision", "acme",
 				"--project", tc.project, "--dry-run"})
 			err := cmd.Execute()
 			require.Error(t, err)
@@ -420,35 +421,63 @@ func TestInferenceEnrollCmd_RejectsInvalidProjectID(t *testing.T) {
 	}
 }
 
-func TestInferenceEnrollCmd_RejectsRepoScoped(t *testing.T) {
+func TestInferenceDeprovisionCmd_DryRunOrgSucceeds(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "enroll", "acme/widget",
+	cmd.SetArgs([]string{"inference", "deprovision", "acme",
+		"--project", "my-project",
+		"--dry-run"})
+	err := cmd.Execute()
+	require.NoError(t, err)
+}
+
+func TestInferenceDeprovisionCmd_DryRunRepoSucceeds(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"inference", "deprovision", "acme/widget",
+		"--project", "my-project",
+		"--dry-run"})
+	err := cmd.Execute()
+	require.NoError(t, err)
+}
+
+func TestInferenceDeprovisionCmd_RejectsPlaceholderOrg(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"inference", "deprovision", "x0fullsend0placeholder",
 		"--project", "my-project"})
 	err := cmd.Execute()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "operates on orgs only")
+	assert.Contains(t, err.Error(), "cannot deprovision reserved placeholder org")
 }
 
-func TestInferenceEnrollCmd_RejectsPlaceholderOrg(t *testing.T) {
+func TestInferenceDeprovisionCmd_RejectsInvalidOrgName(t *testing.T) {
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "enroll", "x0fullsend0placeholder",
-		"--project", "my-project"})
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot enroll reserved placeholder org")
-}
-
-func TestInferenceEnrollCmd_RejectsInvalidOrgName(t *testing.T) {
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "enroll", "-invalid",
+	cmd.SetArgs([]string{"inference", "deprovision", "-invalid",
 		"--project", "my-project"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid")
 }
 
-func TestInferenceEnrollCmd_Flags(t *testing.T) {
-	cmd := newInferenceEnrollCmd()
+func TestInferenceDeprovisionCmd_RejectsInvalidRepoFormat(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"inference", "deprovision", "acme/",
+		"--project", "my-project"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid")
+}
+
+func TestInferenceDeprovisionCmd_RejectsProviderInRepoMode(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"inference", "deprovision", "acme/widget",
+		"--project", "my-project",
+		"--provider", "custom-provider"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--provider is not supported in repo-scoped mode")
+}
+
+func TestInferenceDeprovisionCmd_Flags(t *testing.T) {
+	cmd := newInferenceDeprovisionCmd()
 
 	projectFlag := cmd.Flags().Lookup("project")
 	require.NotNil(t, projectFlag, "expected --project flag")
@@ -465,127 +494,12 @@ func TestInferenceEnrollCmd_Flags(t *testing.T) {
 	require.NotNil(t, dryRunFlag, "expected --dry-run flag")
 }
 
-func TestInferenceEnrollCmd_DryRunSucceeds(t *testing.T) {
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "enroll", "acme",
-		"--project", "my-project",
-		"--dry-run"})
-	err := cmd.Execute()
-	require.NoError(t, err)
-}
-
-func TestInferenceEnrollCmd_DoesNotRequireGitHubToken(t *testing.T) {
+func TestInferenceDeprovisionCmd_DoesNotRequireGitHubToken(t *testing.T) {
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
 
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "enroll", "acme",
-		"--project", "my-project",
-		"--dry-run"})
-	err := cmd.Execute()
-	require.NoError(t, err)
-}
-
-// --- unenroll tests ---
-
-func TestInferenceUnenrollCmd_RequiresArg(t *testing.T) {
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "unenroll"})
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "accepts 1 arg(s)")
-}
-
-func TestInferenceUnenrollCmd_RequiresProject(t *testing.T) {
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "unenroll", "acme"})
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--project is required")
-}
-
-func TestInferenceUnenrollCmd_RejectsInvalidProjectID(t *testing.T) {
-	tests := []struct {
-		name    string
-		project string
-	}{
-		{"uppercase", "MY-PROJECT"},
-		{"too short", "ab"},
-		{"starts with digit", "1project"},
-		{"starts with hyphen", "-project"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			cmd := newRootCmd()
-			cmd.SetArgs([]string{"inference", "unenroll", "acme",
-				"--project", tc.project, "--dry-run"})
-			err := cmd.Execute()
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "invalid GCP project ID")
-		})
-	}
-}
-
-func TestInferenceUnenrollCmd_RejectsRepoScoped(t *testing.T) {
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "unenroll", "acme/widget",
-		"--project", "my-project"})
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "operates on orgs only")
-}
-
-func TestInferenceUnenrollCmd_RejectsPlaceholderOrg(t *testing.T) {
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "unenroll", "x0fullsend0placeholder",
-		"--project", "my-project"})
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot unenroll reserved placeholder org")
-}
-
-func TestInferenceUnenrollCmd_RejectsInvalidOrgName(t *testing.T) {
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "unenroll", "-invalid",
-		"--project", "my-project"})
-	err := cmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid")
-}
-
-func TestInferenceUnenrollCmd_Flags(t *testing.T) {
-	cmd := newInferenceUnenrollCmd()
-
-	projectFlag := cmd.Flags().Lookup("project")
-	require.NotNil(t, projectFlag, "expected --project flag")
-
-	poolFlag := cmd.Flags().Lookup("pool")
-	require.NotNil(t, poolFlag, "expected --pool flag")
-	assert.Equal(t, "fullsend-pool", poolFlag.DefValue)
-
-	providerFlag := cmd.Flags().Lookup("provider")
-	require.NotNil(t, providerFlag, "expected --provider flag")
-	assert.Equal(t, "github-oidc", providerFlag.DefValue)
-
-	dryRunFlag := cmd.Flags().Lookup("dry-run")
-	require.NotNil(t, dryRunFlag, "expected --dry-run flag")
-}
-
-func TestInferenceUnenrollCmd_DryRunSucceeds(t *testing.T) {
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "unenroll", "acme",
-		"--project", "my-project",
-		"--dry-run"})
-	err := cmd.Execute()
-	require.NoError(t, err)
-}
-
-func TestInferenceUnenrollCmd_DoesNotRequireGitHubToken(t *testing.T) {
-	t.Setenv("GH_TOKEN", "")
-	t.Setenv("GITHUB_TOKEN", "")
-
-	cmd := newRootCmd()
-	cmd.SetArgs([]string{"inference", "unenroll", "acme",
+	cmd.SetArgs([]string{"inference", "deprovision", "acme",
 		"--project", "my-project",
 		"--dry-run"})
 	err := cmd.Execute()
