@@ -24,6 +24,9 @@ import (
 	"github.com/fullsend-ai/fullsend/internal/ui"
 )
 
+// Tests in this file mutate package-level globals (githubAPIBaseURL,
+// githubHTTPClient) via save/restore in defer. Do NOT use t.Parallel().
+
 func generateTestPEM(t *testing.T) []byte {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -318,13 +321,15 @@ func TestLoadAppSetPEMs_Success(t *testing.T) {
 	}
 
 	appIDCounter := 100
+	lastLookedUpID := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/app" {
-			fmt.Fprintln(w, `{"id": 1, "slug": "test-app"}`)
+			fmt.Fprintf(w, `{"id": %d, "slug": "test-app"}`, lastLookedUpID)
 			return
 		}
 		appIDCounter++
+		lastLookedUpID = appIDCounter
 		fmt.Fprintf(w, `{"id": %d, "slug": "%s"}`, appIDCounter, r.URL.Path[len("/apps/"):])
 	}))
 	defer srv.Close()

@@ -158,6 +158,16 @@ func verifyPEMMatchesApp(ctx context.Context, pemData []byte, appID int, slug st
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status %d verifying PEM for app %s", resp.StatusCode, slug)
 	}
+
+	var respApp struct {
+		ID int `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&respApp); err != nil {
+		return fmt.Errorf("decoding verify response for app %s: %w", slug, err)
+	}
+	if respApp.ID != appID {
+		return fmt.Errorf("PEM authenticated as app %d but expected app %d (%s)", respApp.ID, appID, slug)
+	}
 	return nil
 }
 
@@ -177,24 +187,20 @@ func listPEMFiles(dir string) []string {
 	return names
 }
 
-// loadAppSetPEMs reads PEM files from pemDir and discovers app IDs from the
-// GitHub API, returning maps ready for gcf.Config.
-func loadAppSetPEMs(ctx context.Context, pemDir, appSet string) (map[string][]byte, map[string]string, error) {
-	if err := appsetup.ValidateAppSet(appSet); err != nil {
-		return nil, nil, fmt.Errorf("invalid app set: %w", err)
-	}
-
+// validatePEMDir checks that pemDir exists, is a directory, and contains valid
+// RSA PEM files for all default mint roles. Returns the validated PEM data keyed
+// by role. This is the offline-only portion of PEM validation — no network calls.
+func validatePEMDir(pemDir string) (map[string][]byte, error) {
 	info, err := os.Stat(pemDir)
 	if err != nil {
-		return nil, nil, fmt.Errorf("--pem-dir %q: %w", pemDir, err)
+		return nil, fmt.Errorf("--pem-dir %q: %w", pemDir, err)
 	}
 	if !info.IsDir() {
-		return nil, nil, fmt.Errorf("--pem-dir %q is not a directory", pemDir)
+		return nil, fmt.Errorf("--pem-dir %q is not a directory", pemDir)
 	}
 
 	roles := defaultMintRoles()
 
-	// Verify all PEM files exist before making API calls.
 	for _, role := range roles {
 		pemPath := filepath.Join(pemDir, role+".pem")
 		if _, err := os.Stat(pemPath); err != nil {
@@ -203,25 +209,42 @@ func loadAppSetPEMs(ctx context.Context, pemDir, appSet string) (map[string][]by
 			for i, r := range roles {
 				expected[i] = r + ".pem"
 			}
-			return nil, nil, fmt.Errorf("missing PEM file for role %q: %s\n  expected files: %s\n  found in dir:   %s",
+			return nil, fmt.Errorf("missing PEM file for role %q: %s\n  expected files: %s\n  found in dir:   %s",
 				role, pemPath, strings.Join(expected, ", "), strings.Join(found, ", "))
 		}
 	}
 
-	agentPEMs := make(map[string][]byte, len(roles))
-	agentAppIDs := make(map[string]string, len(roles))
-
+	pemsByRole := make(map[string][]byte, len(roles))
 	for _, role := range roles {
 		pemPath := filepath.Join(pemDir, role+".pem")
 		pemData, err := os.ReadFile(pemPath)
 		if err != nil {
-			return nil, nil, fmt.Errorf("reading PEM for role %q: %w", role, err)
+			return nil, fmt.Errorf("reading PEM for role %q: %w", role, err)
 		}
-
 		if err := appsetup.ValidateRSAPEM(pemData); err != nil {
-			return nil, nil, fmt.Errorf("invalid PEM for role %q (%s): %w", role, pemPath, err)
+			return nil, fmt.Errorf("invalid PEM for role %q (%s): %w", role, pemPath, err)
 		}
+		pemsByRole[role] = pemData
+	}
+	return pemsByRole, nil
+}
 
+// loadAppSetPEMs reads PEM files from pemDir and discovers app IDs from the
+// GitHub API, returning maps ready for gcf.Config.
+func loadAppSetPEMs(ctx context.Context, pemDir, appSet string) (map[string][]byte, map[string]string, error) {
+	if err := appsetup.ValidateAppSet(appSet); err != nil {
+		return nil, nil, fmt.Errorf("invalid app set: %w", err)
+	}
+
+	pemsByRole, err := validatePEMDir(pemDir)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	agentPEMs := make(map[string][]byte, len(pemsByRole))
+	agentAppIDs := make(map[string]string, len(pemsByRole))
+
+	for role, pemData := range pemsByRole {
 		slug := appsetup.AppSlug(appSet, role)
 		appID, err := lookupAppID(ctx, slug)
 		if err != nil {
@@ -306,34 +329,10 @@ that 'mint enroll' can work without running 'admin install' first.`,
 					printer.StepInfo("Would skip code deployment (--skip-deploy)")
 				}
 				if pemDir != "" {
-					dirInfo, err := os.Stat(pemDir)
-					if err != nil {
-						return fmt.Errorf("--pem-dir %q: %w", pemDir, err)
+					if _, err := validatePEMDir(pemDir); err != nil {
+						return err
 					}
-					if !dirInfo.IsDir() {
-						return fmt.Errorf("--pem-dir %q is not a directory", pemDir)
-					}
-					roles := defaultMintRoles()
-					for _, role := range roles {
-						pemPath := filepath.Join(pemDir, role+".pem")
-						if _, err := os.Stat(pemPath); err != nil {
-							found := listPEMFiles(pemDir)
-							expected := make([]string, len(roles))
-							for i, r := range roles {
-								expected[i] = r + ".pem"
-							}
-							return fmt.Errorf("missing PEM file for role %q: %s\n  expected files: %s\n  found in dir:   %s",
-								role, pemPath, strings.Join(expected, ", "), strings.Join(found, ", "))
-						}
-						pemData, err := os.ReadFile(pemPath)
-						if err != nil {
-							return fmt.Errorf("reading PEM for role %q: %w", role, err)
-						}
-						if err := appsetup.ValidateRSAPEM(pemData); err != nil {
-							return fmt.Errorf("invalid PEM for role %q (%s): %w", role, pemPath, err)
-						}
-					}
-					printer.StepInfo(fmt.Sprintf("Would bootstrap app set %q with PEMs from %s", appsetup.DefaultAppSet, pemDir))
+					printer.StepInfo(fmt.Sprintf("Would bootstrap app set %q with PEMs from %s (app ID lookup and PEM verification skipped in dry-run)", appsetup.DefaultAppSet, pemDir))
 				}
 				return nil
 			}
@@ -365,6 +364,8 @@ that 'mint enroll' can work without running 'admin install' first.`,
 				}
 				printer.StepDone(fmt.Sprintf("Loaded %d role PEMs for app set %q", len(agentPEMs), appsetup.DefaultAppSet))
 
+				// The default app set name ("fullsend-ai") doubles as the PEM storage
+				// key prefix. Custom app sets must use admin install instead.
 				cfg.GitHubOrgs = []string{appsetup.DefaultAppSet}
 				cfg.AgentPEMs = agentPEMs
 				cfg.AgentAppIDs = agentAppIDs
