@@ -551,7 +551,7 @@ func runMintEnrollOrg(ctx context.Context, printer *ui.Printer, org, project, re
 			}
 		}
 		printer.StepInfo(fmt.Sprintf("  Would add %s to ALLOWED_ORGS", org))
-		printer.StepInfo(fmt.Sprintf("  Would copy PEMs from %s for %d roles", appSet, len(roleList)))
+		printer.StepInfo(fmt.Sprintf("  Would copy or re-enable PEMs from %s for %d roles", appSet, len(roleList)))
 		printer.StepInfo(fmt.Sprintf("  Would add %s to WIF provider condition", org))
 		printer.Blank()
 		printer.StepInfo("To grant Agent Platform access, run 'fullsend inference provision' separately")

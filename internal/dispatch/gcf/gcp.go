@@ -471,13 +471,17 @@ func (c *LiveGCFClient) DisableSecretVersion(ctx context.Context, projectID, sec
 	}
 
 	var version struct {
-		Name string `json:"name"`
+		Name  string `json:"name"`
+		State string `json:"state"`
 	}
 	if err := json.NewDecoder(io.LimitReader(getResp.Body, 1<<20)).Decode(&version); err != nil {
 		return fmt.Errorf("decoding secret version metadata: %w", err)
 	}
 	if !secretVersionPattern.MatchString(version.Name) {
 		return fmt.Errorf("secret version name %q does not match expected pattern", version.Name)
+	}
+	if version.State == "DISABLED" || version.State == "DESTROYED" {
+		return nil
 	}
 
 	// Disable the resolved version.
@@ -532,6 +536,9 @@ func (c *LiveGCFClient) EnableSecretVersion(ctx context.Context, projectID, secr
 	}
 	if version.State == "ENABLED" {
 		return nil
+	}
+	if version.State == "DESTROYED" {
+		return fmt.Errorf("secret version %s is destroyed and cannot be re-enabled", version.Name)
 	}
 
 	enableURL := fmt.Sprintf("https://secretmanager.googleapis.com/v1/%s:enable", version.Name)

@@ -125,7 +125,7 @@ Inference authentication uses GCP Workload Identity Federation (WIF) to allow Gi
 │  ┌─────────────────────────────────┐                        │
 │  │ GCP Security Token Service (STS)│                        │
 │  │                                 │                        │
-│  │ WIF Pool: fullsend-pool         │                        │
+│  │ WIF Pool: fullsend-inference     │                        │
 │  │ WIF Provider: fullsend-github   │                        │
 │  │                                 │                        │
 │  │ Validates OIDC issuer:          │                        │
@@ -163,7 +163,7 @@ Inference authentication uses GCP Workload Identity Federation (WIF) to allow Gi
 During installation, the GCF provisioner creates:
 
 1. **Service Account** — For the Cloud Function identity
-2. **WIF Pool** — `fullsend-pool` in the GCP project
+2. **WIF Pool** — `fullsend-inference` for inference, `fullsend-pool` for mint
 3. **WIF Provider** — Maps GitHub OIDC claims to GCP attributes
 4. **IAM Bindings** — Grants `roles/aiplatform.user` to federated identities
 5. **Per-repo providers** (per-repo mode) — Scoped WIF provider per repository via `BuildRepoProviderID()`
@@ -238,7 +238,7 @@ The GCF provisioner handles full GCP infrastructure deployment:
 │  └─────────┬─────────┘                                          │
 │            ▼                                                    │
 │  ┌───────────────────┐                                          │
-│  │ Create WIF Pool   │ fullsend-pool                            │
+│  │ Create WIF Pool   │ fullsend-inference (or fullsend-pool)     │
 │  │                   │ (skip if exists)                         │
 │  └─────────┬─────────┘                                          │
 │            ▼                                                    │
