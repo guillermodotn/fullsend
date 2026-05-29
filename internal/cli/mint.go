@@ -558,13 +558,17 @@ func runMintEnrollOrg(ctx context.Context, printer *ui.Printer, org, project, re
 		return nil
 	}
 
-	// Step 3: Copy PEM secrets from app set.
+	// Step 3: Copy PEM secrets from app set (or re-enable if disabled by unenroll).
 	for _, role := range roleList {
 		exists, existsErr := provisioner.SecretExists(ctx, org, role)
 		if existsErr != nil {
 			return fmt.Errorf("checking PEM for %s/%s: %w", org, role, existsErr)
 		}
 		if exists {
+			if err := provisioner.EnablePEMSecrets(ctx, org, []string{role}); err != nil {
+				printer.StepFail(fmt.Sprintf("Failed to re-enable PEM for %s/%s", org, role))
+				return fmt.Errorf("re-enabling PEM for %s/%s: %w", org, role, err)
+			}
 			printer.StepDone(fmt.Sprintf("PEM exists: %s/%s", org, role))
 			continue
 		}

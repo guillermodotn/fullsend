@@ -1591,6 +1591,25 @@ func (p *Provisioner) DisablePEMSecrets(ctx context.Context, org string, roles [
 	return nil
 }
 
+// EnablePEMSecrets re-enables the latest version of each PEM secret for an
+// org's roles. This reverses DisablePEMSecrets after a re-enrollment.
+// Skips secrets that do not exist.
+func (p *Provisioner) EnablePEMSecrets(ctx context.Context, org string, roles []string) error {
+	for _, role := range roles {
+		sid := secretID(org, role)
+		if err := p.gcpAPI.GetSecret(ctx, p.cfg.ProjectID, sid); err != nil {
+			if errors.Is(err, ErrSecretNotFound) {
+				continue
+			}
+			return fmt.Errorf("checking secret %s: %w", sid, err)
+		}
+		if err := p.gcpAPI.EnableSecretVersion(ctx, p.cfg.ProjectID, sid); err != nil {
+			return fmt.Errorf("enabling secret %s: %w", sid, err)
+		}
+	}
+	return nil
+}
+
 // DeletePEMSecrets permanently deletes PEM secrets for an org's roles.
 // Skips secrets that do not exist.
 func (p *Provisioner) DeletePEMSecrets(ctx context.Context, org string, roles []string) error {

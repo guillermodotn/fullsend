@@ -163,6 +163,10 @@ func (f *fakeGCFClient) DisableSecretVersion(_ context.Context, _ string, sid st
 	f.calls = append(f.calls, "DisableSecretVersion")
 	return f.errs["DisableSecretVersion"]
 }
+func (f *fakeGCFClient) EnableSecretVersion(_ context.Context, _ string, sid string) error {
+	f.calls = append(f.calls, "EnableSecretVersion")
+	return f.errs["EnableSecretVersion"]
+}
 func (f *fakeGCFClient) DeleteSecret(_ context.Context, _ string, sid string) error {
 	f.calls = append(f.calls, "DeleteSecret")
 	if f.secrets != nil {
