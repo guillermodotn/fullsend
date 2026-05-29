@@ -3,15 +3,24 @@ package cli
 import (
 	"bufio"
 	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -47,6 +56,8 @@ func resolveRole(role string) string {
 // Overridden in tests to use httptest servers.
 var githubAPIBaseURL = "https://api.github.com"
 
+var githubHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
 // lookupAppID fetches the numeric app ID for a public GitHub App by slug.
 // It makes an unauthenticated GET request to the GitHub API.
 func lookupAppID(ctx context.Context, slug string) (int, error) {
@@ -57,14 +68,20 @@ func lookupAppID(ctx context.Context, slug string) (int, error) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := githubHTTPClient.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("looking up app %s: %w", slug, err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+	}()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return 0, fmt.Errorf("GitHub App %q not found — ensure the app exists and is publicly visible", slug)
+	}
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
+		return 0, fmt.Errorf("GitHub API rate limit exceeded for app %s — unauthenticated requests are limited to 60/hour; try again later", slug)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return 0, fmt.Errorf("GitHub API returned %d for app %s", resp.StatusCode, slug)
@@ -82,6 +99,84 @@ func lookupAppID(ctx context.Context, slug string) (int, error) {
 	return app.ID, nil
 }
 
+// verifyPEMMatchesApp confirms a PEM private key belongs to the given GitHub
+// App by generating a JWT and calling GET /app with it. Returns nil on success.
+func verifyPEMMatchesApp(ctx context.Context, pemData []byte, appID int, slug string) error {
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		return fmt.Errorf("failed to decode PEM block")
+	}
+	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err != nil {
+		pkcs8Key, pkcs8Err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if pkcs8Err != nil {
+			return fmt.Errorf("parsing private key: %w", pkcs8Err)
+		}
+		var ok bool
+		key, ok = pkcs8Key.(*rsa.PrivateKey)
+		if !ok {
+			return fmt.Errorf("key is not RSA")
+		}
+	}
+
+	now := time.Now()
+	headerJSON, _ := json.Marshal(map[string]string{"alg": "RS256", "typ": "JWT"})
+	claimsJSON, _ := json.Marshal(map[string]interface{}{
+		"iss": strconv.Itoa(appID),
+		"iat": now.Add(-60 * time.Second).Unix(),
+		"exp": now.Add(5 * time.Minute).Unix(),
+	})
+	signingInput := base64.RawURLEncoding.EncodeToString(headerJSON) + "." +
+		base64.RawURLEncoding.EncodeToString(claimsJSON)
+	hashed := sha256.Sum256([]byte(signingInput))
+	sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hashed[:])
+	if err != nil {
+		return fmt.Errorf("signing JWT: %w", err)
+	}
+	jwt := signingInput + "." + base64.RawURLEncoding.EncodeToString(sig)
+
+	url := githubAPIBaseURL + "/app"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("creating verify request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := githubHTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("verifying PEM against GitHub: %w", err)
+	}
+	defer func() {
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+	}()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("PEM does not match GitHub App %q (app ID %d) — the key may belong to a different app or have been revoked", slug, appID)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status %d verifying PEM for app %s", resp.StatusCode, slug)
+	}
+	return nil
+}
+
+// listPEMFiles returns the basenames of .pem files in dir, for diagnostics.
+func listPEMFiles(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".pem") {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
 // loadAppSetPEMs reads PEM files from pemDir and discovers app IDs from the
 // GitHub API, returning maps ready for gcf.Config.
 func loadAppSetPEMs(ctx context.Context, pemDir, appSet string) (map[string][]byte, map[string]string, error) {
@@ -89,7 +184,30 @@ func loadAppSetPEMs(ctx context.Context, pemDir, appSet string) (map[string][]by
 		return nil, nil, fmt.Errorf("invalid app set: %w", err)
 	}
 
+	info, err := os.Stat(pemDir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("--pem-dir %q: %w", pemDir, err)
+	}
+	if !info.IsDir() {
+		return nil, nil, fmt.Errorf("--pem-dir %q is not a directory", pemDir)
+	}
+
 	roles := defaultMintRoles()
+
+	// Verify all PEM files exist before making API calls.
+	for _, role := range roles {
+		pemPath := filepath.Join(pemDir, role+".pem")
+		if _, err := os.Stat(pemPath); err != nil {
+			found := listPEMFiles(pemDir)
+			expected := make([]string, len(roles))
+			for i, r := range roles {
+				expected[i] = r + ".pem"
+			}
+			return nil, nil, fmt.Errorf("missing PEM file for role %q: %s\n  expected files: %s\n  found in dir:   %s",
+				role, pemPath, strings.Join(expected, ", "), strings.Join(found, ", "))
+		}
+	}
+
 	agentPEMs := make(map[string][]byte, len(roles))
 	agentAppIDs := make(map[string]string, len(roles))
 
@@ -100,10 +218,18 @@ func loadAppSetPEMs(ctx context.Context, pemDir, appSet string) (map[string][]by
 			return nil, nil, fmt.Errorf("reading PEM for role %q: %w", role, err)
 		}
 
+		if err := appsetup.ValidateRSAPEM(pemData); err != nil {
+			return nil, nil, fmt.Errorf("invalid PEM for role %q (%s): %w", role, pemPath, err)
+		}
+
 		slug := appsetup.AppSlug(appSet, role)
 		appID, err := lookupAppID(ctx, slug)
 		if err != nil {
 			return nil, nil, fmt.Errorf("looking up app ID for %s: %w", slug, err)
+		}
+
+		if err := verifyPEMMatchesApp(ctx, pemData, appID, slug); err != nil {
+			return nil, nil, fmt.Errorf("verifying PEM for role %q: %w", role, err)
 		}
 
 		agentPEMs[role] = pemData
@@ -142,7 +268,11 @@ func newMintDeployCmd() *cobra.Command {
 		Short: "Deploy or update the token mint Cloud Function",
 		Long: `Deploys the fullsend-mint Cloud Function and supporting GCP infrastructure
 (service account, WIF pool/provider). Does NOT enroll any org — use
-'fullsend mint enroll' after deployment.`,
+'fullsend mint enroll' after deployment.
+
+Most runs need only --project and --region. The optional --pem-dir flag is
+for first-time bootstrap only: it seeds the default app set's PEM secrets so
+that 'mint enroll' can work without running 'admin install' first.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if project == "" {
@@ -176,6 +306,33 @@ func newMintDeployCmd() *cobra.Command {
 					printer.StepInfo("Would skip code deployment (--skip-deploy)")
 				}
 				if pemDir != "" {
+					dirInfo, err := os.Stat(pemDir)
+					if err != nil {
+						return fmt.Errorf("--pem-dir %q: %w", pemDir, err)
+					}
+					if !dirInfo.IsDir() {
+						return fmt.Errorf("--pem-dir %q is not a directory", pemDir)
+					}
+					roles := defaultMintRoles()
+					for _, role := range roles {
+						pemPath := filepath.Join(pemDir, role+".pem")
+						if _, err := os.Stat(pemPath); err != nil {
+							found := listPEMFiles(pemDir)
+							expected := make([]string, len(roles))
+							for i, r := range roles {
+								expected[i] = r + ".pem"
+							}
+							return fmt.Errorf("missing PEM file for role %q: %s\n  expected files: %s\n  found in dir:   %s",
+								role, pemPath, strings.Join(expected, ", "), strings.Join(found, ", "))
+						}
+						pemData, err := os.ReadFile(pemPath)
+						if err != nil {
+							return fmt.Errorf("reading PEM for role %q: %w", role, err)
+						}
+						if err := appsetup.ValidateRSAPEM(pemData); err != nil {
+							return fmt.Errorf("invalid PEM for role %q (%s): %w", role, pemPath, err)
+						}
+					}
 					printer.StepInfo(fmt.Sprintf("Would bootstrap app set %q with PEMs from %s", appsetup.DefaultAppSet, pemDir))
 				}
 				return nil
@@ -249,7 +406,7 @@ func newMintDeployCmd() *cobra.Command {
 	cmd.Flags().StringVar(&sourceDir, "source-dir", "", "path to local mint source (default: embedded)")
 	cmd.Flags().BoolVar(&skipDeploy, "skip-deploy", false, "skip code upload, reuse existing function")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview changes without making them")
-	cmd.Flags().StringVar(&pemDir, "pem-dir", "", "directory containing {role}.pem files for the app set")
+	cmd.Flags().StringVar(&pemDir, "pem-dir", "", "optional: directory containing {role}.pem files to bootstrap the default app set")
 
 	return cmd
 }

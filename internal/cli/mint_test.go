@@ -3,6 +3,10 @@ package cli
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,6 +23,16 @@ import (
 	"github.com/fullsend-ai/fullsend/internal/config"
 	"github.com/fullsend-ai/fullsend/internal/ui"
 )
+
+func generateTestPEM(t *testing.T) []byte {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	return pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+}
 
 func TestMintCommand_HasSubcommands(t *testing.T) {
 	cmd := newMintCmd()
@@ -110,10 +125,50 @@ func TestMintDeployCmd_PemDirFlag(t *testing.T) {
 }
 
 func TestMintDeployCmd_DryRunWithPemDir(t *testing.T) {
+	pemDir := t.TempDir()
+	testPEM := generateTestPEM(t)
+	for _, role := range defaultMintRoles() {
+		require.NoError(t, os.WriteFile(filepath.Join(pemDir, role+".pem"), testPEM, 0o600))
+	}
+
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"mint", "deploy", "--project=my-project-id", "--dry-run", "--pem-dir=/tmp/pems"})
+	cmd.SetArgs([]string{"mint", "deploy", "--project=my-project-id", "--dry-run", "--pem-dir=" + pemDir})
 	err := cmd.Execute()
 	require.NoError(t, err)
+}
+
+func TestMintDeployCmd_DryRunWithBadPemDir(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"mint", "deploy", "--project=my-project-id", "--dry-run", "--pem-dir=/nonexistent"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--pem-dir")
+}
+
+func TestMintDeployCmd_DryRunWithPemDirAsFile(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "notadir.txt")
+	require.NoError(t, os.WriteFile(tmpFile, []byte("dummy"), 0o600))
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"mint", "deploy", "--project=my-project-id", "--dry-run", "--pem-dir=" + tmpFile})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "is not a directory")
+}
+
+func TestMintDeployCmd_DryRunWithInvalidPEM(t *testing.T) {
+	pemDir := t.TempDir()
+	testPEM := generateTestPEM(t)
+	for _, role := range defaultMintRoles() {
+		require.NoError(t, os.WriteFile(filepath.Join(pemDir, role+".pem"), testPEM, 0o600))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(pemDir, "coder.pem"), []byte("not-a-pem"), 0o600))
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"mint", "deploy", "--project=my-project-id", "--dry-run", "--pem-dir=" + pemDir})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid PEM for role")
 }
 
 // --- lookupAppID tests ---
@@ -165,21 +220,111 @@ func TestLookupAppID_ServerError(t *testing.T) {
 	assert.Contains(t, err.Error(), "500")
 }
 
+func TestLookupAppID_RateLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code int
+	}{
+		{"Forbidden", http.StatusForbidden},
+		{"TooManyRequests", http.StatusTooManyRequests},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.code)
+			}))
+			defer srv.Close()
+
+			orig := githubAPIBaseURL
+			githubAPIBaseURL = srv.URL
+			defer func() { githubAPIBaseURL = orig }()
+
+			_, err := lookupAppID(context.Background(), "some-app")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "rate limit")
+		})
+	}
+}
+
+// --- verifyPEMMatchesApp tests ---
+
+func TestVerifyPEMMatchesApp_Success(t *testing.T) {
+	testPEM := generateTestPEM(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/app", r.URL.Path)
+		assert.Contains(t, r.Header.Get("Authorization"), "Bearer ")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintln(w, `{"id": 12345, "slug": "test-app"}`)
+	}))
+	defer srv.Close()
+
+	orig := githubAPIBaseURL
+	githubAPIBaseURL = srv.URL
+	defer func() { githubAPIBaseURL = orig }()
+
+	err := verifyPEMMatchesApp(context.Background(), testPEM, 12345, "test-app")
+	require.NoError(t, err)
+}
+
+func TestVerifyPEMMatchesApp_WrongKey(t *testing.T) {
+	testPEM := generateTestPEM(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	orig := githubAPIBaseURL
+	githubAPIBaseURL = srv.URL
+	defer func() { githubAPIBaseURL = orig }()
+
+	err := verifyPEMMatchesApp(context.Background(), testPEM, 12345, "test-app")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not match")
+}
+
+// --- listPEMFiles tests ---
+
+func TestListPEMFiles(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "coder.pem"), []byte("x"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "review.pem"), []byte("x"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "other.txt"), []byte("x"), 0o600))
+
+	files := listPEMFiles(dir)
+	assert.Equal(t, []string{"coder.pem", "review.pem"}, files)
+}
+
+func TestListPEMFiles_EmptyDir(t *testing.T) {
+	files := listPEMFiles(t.TempDir())
+	assert.Empty(t, files)
+}
+
+func TestListPEMFiles_NonexistentDir(t *testing.T) {
+	files := listPEMFiles("/nonexistent/path")
+	assert.Nil(t, files)
+}
+
 // --- loadAppSetPEMs tests ---
 
 func TestLoadAppSetPEMs_Success(t *testing.T) {
 	roles := defaultMintRoles()
+	testPEM := generateTestPEM(t)
 
 	pemDir := t.TempDir()
 	for _, role := range roles {
-		err := os.WriteFile(filepath.Join(pemDir, role+".pem"), []byte("-----BEGIN RSA PRIVATE KEY-----\nfake-"+role+"\n-----END RSA PRIVATE KEY-----\n"), 0o600)
+		err := os.WriteFile(filepath.Join(pemDir, role+".pem"), testPEM, 0o600)
 		require.NoError(t, err)
 	}
 
 	appIDCounter := 100
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		appIDCounter++
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/app" {
+			fmt.Fprintln(w, `{"id": 1, "slug": "test-app"}`)
+			return
+		}
+		appIDCounter++
 		fmt.Fprintf(w, `{"id": %d, "slug": "%s"}`, appIDCounter, r.URL.Path[len("/apps/"):])
 	}))
 	defer srv.Close()
@@ -209,7 +354,7 @@ func TestLoadAppSetPEMs_MissingPEM(t *testing.T) {
 
 	_, _, err = loadAppSetPEMs(context.Background(), pemDir, "fullsend-ai")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "reading PEM for role")
+	assert.Contains(t, err.Error(), "missing PEM file for role")
 }
 
 func TestLoadAppSetPEMs_InvalidAppSet(t *testing.T) {
@@ -218,11 +363,60 @@ func TestLoadAppSetPEMs_InvalidAppSet(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid app set")
 }
 
+func TestLoadAppSetPEMs_InvalidPEM(t *testing.T) {
+	pemDir := t.TempDir()
+	testPEM := generateTestPEM(t)
+	roles := defaultMintRoles()
+	for _, role := range roles {
+		require.NoError(t, os.WriteFile(filepath.Join(pemDir, role+".pem"), testPEM, 0o600))
+	}
+	// Overwrite one with invalid content.
+	require.NoError(t, os.WriteFile(filepath.Join(pemDir, "coder.pem"), []byte("not-a-pem"), 0o600))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/app" {
+			fmt.Fprintln(w, `{"id": 1, "slug": "test-app"}`)
+			return
+		}
+		fmt.Fprintln(w, `{"id": 999, "slug": "test-app"}`)
+	}))
+	defer srv.Close()
+
+	orig := githubAPIBaseURL
+	githubAPIBaseURL = srv.URL
+	defer func() { githubAPIBaseURL = orig }()
+
+	_, _, err := loadAppSetPEMs(context.Background(), pemDir, "fullsend-ai")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid PEM for role")
+}
+
+func TestLoadAppSetPEMs_BadDir(t *testing.T) {
+	_, _, err := loadAppSetPEMs(context.Background(), "/nonexistent/path", "fullsend-ai")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--pem-dir")
+}
+
+func TestLoadAppSetPEMs_FileNotDir(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "notadir.txt")
+	require.NoError(t, os.WriteFile(tmpFile, []byte("dummy"), 0o600))
+
+	_, _, err := loadAppSetPEMs(context.Background(), tmpFile, "fullsend-ai")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "is not a directory")
+}
+
+func TestGitHubHTTPClient_HasTimeout(t *testing.T) {
+	assert.Equal(t, 30*time.Second, githubHTTPClient.Timeout)
+}
+
 func TestLoadAppSetPEMs_AppNotFound(t *testing.T) {
 	roles := defaultMintRoles()
+	testPEM := generateTestPEM(t)
 	pemDir := t.TempDir()
 	for _, role := range roles {
-		err := os.WriteFile(filepath.Join(pemDir, role+".pem"), []byte("fake"), 0o600)
+		err := os.WriteFile(filepath.Join(pemDir, role+".pem"), testPEM, 0o600)
 		require.NoError(t, err)
 	}
 

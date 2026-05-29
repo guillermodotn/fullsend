@@ -57,19 +57,21 @@ When using the default app set, an **org owner** installs each app from these UR
 
 > **Tip:** To verify apps are installed, run `gh api /orgs/{org}/installations --jq '.installations[].app_slug'`.
 
-### Bootstrapping PEMs during mint deploy
+### Bootstrapping PEMs during mint deploy (optional)
 
-When deploying a fresh mint, you can bootstrap the app set's PEM secrets during deployment by providing PEM files on disk. This allows `mint enroll` to work immediately without needing `admin install` first.
+Most `mint deploy` runs need only `--project` and `--region` — they deploy or update the Cloud Function and GCP infrastructure without touching PEM secrets.
+
+For **first-time setup only**, the optional `--pem-dir` flag seeds the default app set's PEM secrets during deployment. This allows `mint enroll` to work immediately without running `admin install` first.
 
 ```bash
+# Typical deploy (no PEMs needed):
+fullsend mint deploy --project=<PROJECT>
+
+# First-time bootstrap with PEMs:
 fullsend mint deploy --project=<PROJECT> --pem-dir=/path/to/pems
 ```
 
 The `--pem-dir` directory must contain one `{role}.pem` file per agent role (e.g., `fullsend.pem`, `triage.pem`, `coder.pem`, `review.pem`, `retro.pem`, `prioritize.pem`). The CLI auto-discovers each app's numeric ID from the GitHub API by looking up the public app slug (`fullsend-ai-{role}`).
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--pem-dir` | — | Directory containing `{role}.pem` files |
 
 After deploying with PEMs, enrollment works directly:
 
