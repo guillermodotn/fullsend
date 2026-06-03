@@ -90,6 +90,11 @@ is_control_label() {
 
 # --- Action-specific validation and control labels ---
 
+# Deferred label: when set, applied after label_actions so it fires last.
+# This prevents the ready-to-code webhook event from being superseded by
+# subsequent label events in the dispatch concurrency group (see #1752).
+DEFERRED_LABEL=""
+
 case "${ACTION}" in
   insufficient)
     if [[ -z "${COMMENT}" ]]; then
@@ -160,8 +165,8 @@ case "${ACTION}" in
     echo "Category: ${CATEGORY}"
     case "${CATEGORY}" in
       bug|documentation|performance)
-        echo "Applying ready-to-code label (${CATEGORY})..."
-        add_label "ready-to-code"
+        echo "Deferring ready-to-code label (${CATEGORY}) until after label_actions..."
+        DEFERRED_LABEL="ready-to-code"
         ;;
       feature)
         echo "Applying feature + triaged labels..."
@@ -230,6 +235,13 @@ if [[ "${HAS_LABEL_ACTIONS}" == "true" ]]; then
 ---
 **Labels:** ${LABEL_REASON}"
   fi
+fi
+
+# --- Apply deferred label (must be last label mutation) ---
+
+if [[ -n "${DEFERRED_LABEL}" ]]; then
+  echo "Applying deferred label '${DEFERRED_LABEL}'..."
+  add_label "${DEFERRED_LABEL}"
 fi
 
 # --- Post comment ---

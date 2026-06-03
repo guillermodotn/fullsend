@@ -309,6 +309,72 @@ run_test_no_pattern "label-actions-all-refused-no-reason" \
   '{"action":"sufficient","reasoning":"all clear","clarity_scores":{"symptom":0.9,"cause":0.85,"reproduction":0.9,"impact":0.8,"overall":0.87},"triage_summary":{"title":"Fix crash","severity":"high","category":"bug","problem":"Crash","root_cause_hypothesis":"Buffer overflow","reproduction_steps":["step 1"],"environment":"Linux","impact":"All users","recommended_fix":"Fix buffer","proposed_test_case":"test_crash"},"comment":"## Triage Summary\n\nReady.","label_actions":{"reason":"Should not appear.","actions":[{"action":"add","label":"ready-to-code"}]}}' \
   "Should not appear."
 
+# run_test_label_order verifies that a pattern appears AFTER another pattern
+# in the gh call log (i.e., ordering of API calls).
+run_test_label_order() {
+  local test_name="$1"
+  local json_content="$2"
+  local before_pattern="$3"
+  local after_pattern="$4"
+
+  local run_dir="${TMPDIR}/run-${test_name}"
+  mkdir -p "${run_dir}/iteration-1/output"
+  echo "${json_content}" > "${run_dir}/iteration-1/output/agent-result.json"
+  : > "${GH_LOG}"
+
+  local exit_code=0
+  (cd "${run_dir}" && bash "${POST_SCRIPT}") > "${TMPDIR}/stdout.log" 2>&1 || exit_code=$?
+
+  if [[ ${exit_code} -ne 0 ]]; then
+    echo "FAIL: ${test_name} — exit code ${exit_code}"
+    cat "${TMPDIR}/stdout.log"
+    FAILURES=$((FAILURES + 1))
+    return
+  fi
+
+  local before_line after_line
+  before_line=$(grep -nF "${before_pattern}" "${GH_LOG}" | head -1 | cut -d: -f1)
+  after_line=$(grep -nF "${after_pattern}" "${GH_LOG}" | head -1 | cut -d: -f1)
+
+  if [[ -z "${before_line}" ]]; then
+    echo "FAIL: ${test_name} — before pattern '${before_pattern}' not found"
+    echo "Actual calls:"
+    cat "${GH_LOG}"
+    FAILURES=$((FAILURES + 1))
+    return
+  fi
+
+  if [[ -z "${after_line}" ]]; then
+    echo "FAIL: ${test_name} — after pattern '${after_pattern}' not found"
+    echo "Actual calls:"
+    cat "${GH_LOG}"
+    FAILURES=$((FAILURES + 1))
+    return
+  fi
+
+  if [[ "${before_line}" -ge "${after_line}" ]]; then
+    echo "FAIL: ${test_name} — '${before_pattern}' (line ${before_line}) should appear before '${after_pattern}' (line ${after_line})"
+    echo "Actual calls:"
+    cat "${GH_LOG}"
+    FAILURES=$((FAILURES + 1))
+    return
+  fi
+
+  echo "PASS: ${test_name}"
+}
+
+# Verify ready-to-code is applied AFTER informational labels from label_actions
+# to prevent the ready-to-code webhook event from being superseded (#1752).
+run_test_label_order "ready-to-code-applied-after-label-actions" \
+  '{"action":"sufficient","reasoning":"all clear","clarity_scores":{"symptom":0.9,"cause":0.85,"reproduction":0.9,"impact":0.8,"overall":0.87},"triage_summary":{"title":"Fix crash","severity":"high","category":"bug","problem":"Crash","root_cause_hypothesis":"Buffer overflow","reproduction_steps":["step 1"],"environment":"Linux","impact":"All users","recommended_fix":"Fix buffer","proposed_test_case":"test_crash"},"comment":"## Triage Summary\n\nReady.","label_actions":{"reason":"Component label.","actions":[{"action":"add","label":"area/api"},{"action":"add","label":"priority/high"}]}}' \
+  "labels[]=priority/high" \
+  "labels[]=ready-to-code"
+
+# Verify ready-to-code is still applied when there are no label_actions.
+run_test "ready-to-code-applied-without-label-actions" \
+  '{"action":"sufficient","reasoning":"all clear","clarity_scores":{"symptom":0.9,"cause":0.85,"reproduction":0.9,"impact":0.8,"overall":0.87},"triage_summary":{"title":"Fix crash","severity":"high","category":"bug","problem":"Crash","root_cause_hypothesis":"Buffer overflow","reproduction_steps":["step 1"],"environment":"Linux","impact":"All users","recommended_fix":"Fix buffer","proposed_test_case":"test_crash"},"comment":"## Triage Summary\n\nReady."}' \
+  "gh api repos/test-org/test-repo/issues/42/labels -f labels[]=ready-to-code --silent"
+
 # --- Summary ---
 
 echo ""
