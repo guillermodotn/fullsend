@@ -50,6 +50,16 @@ UPDATE_COMMIT_MSG="chore: update fullsend shim workflow
 Update the shim workflow to match the current template
 in the .fullsend config repo."
 
+ENROLL_COMMIT_MSG="chore: add fullsend shim workflow
+
+Add the shim workflow that routes repository events to
+the fullsend agent dispatch pipeline."
+
+UNENROLL_COMMIT_MSG="chore: remove fullsend shim workflow
+
+Remove the shim workflow. The repo has been set to
+enabled: false in the fullsend config."
+
 if [ ! -f "$SHIM_TEMPLATE" ]; then
   echo "::error::shim template not found at $SHIM_TEMPLATE"
   exit 1
@@ -367,10 +377,6 @@ if [ -n "$ENABLED_REPOS" ]; then
       continue
     fi
 
-    ENROLL_COMMIT_MSG="chore: add fullsend shim workflow
-
-Add the shim workflow that routes repository events to
-the fullsend agent dispatch pipeline."
     if ! write_shim_to_branch_from_default "$REPO" "$ENROLL_BRANCH" "$SHIM_CONTENT" "$ENROLL_COMMIT_MSG"; then
       FAILED=$((FAILED + 1))
       continue
@@ -453,10 +459,6 @@ if [ -n "$DISABLED_REPOS" ]; then
     fi
 
     # Delete the shim workflow on the removal branch.
-    UNENROLL_COMMIT_MSG="chore: remove fullsend shim workflow
-
-Remove the shim workflow. The repo has been set to
-enabled: false in the fullsend config."
     if ! gh api "repos/$ORG/$REPO/contents/$SHIM_PATH" \
       --method DELETE \
       --field "message=$UNENROLL_COMMIT_MSG" \

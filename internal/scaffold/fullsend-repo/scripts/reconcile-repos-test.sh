@@ -301,6 +301,13 @@ if [ "$msg_index" -eq 0 ]; then
   exit 1
 fi
 
+# Expect exactly 4 commit messages: update (stale shim), refresh (existing PR),
+# add (new enrollment), and remove (unenrollment).
+if [ "$msg_index" -ne 4 ]; then
+  echo "FAIL: expected 4 commit messages but found $msg_index"
+  exit 1
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo "--- captured commit messages ---"
   cat "${COMMIT_MSGS_LOG}"
