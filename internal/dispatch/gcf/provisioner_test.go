@@ -2975,6 +2975,29 @@ func TestRegisterPerRepoWIF_PartialFailureSurfacesRevision(t *testing.T) {
 	assert.Contains(t, err.Error(), "traffic routing failed")
 }
 
+func TestRegisterPerRepoWIF_ReadsFromTrafficServingRevision(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		URI: "https://mint.example.com",
+		// Template has stale/empty data.
+		EnvVars: map[string]string{},
+	}
+	// Traffic-serving revision has existing repos.
+	fake.trafficEnvVars = map[string]string{
+		"PER_REPO_WIF_REPOS": "existing-org/existing-repo",
+		"ALLOWED_ORGS":       "existing-org",
+	}
+
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
+	err := p.RegisterPerRepoWIF(context.Background(), "new-org/new-repo")
+	require.NoError(t, err)
+	assert.Contains(t, fake.calls, "GetServiceTrafficEnvVars")
+	// Must preserve existing repos from traffic-serving revision.
+	assert.Equal(t, "existing-org/existing-repo,new-org/new-repo", fake.lastUpdateServiceEnvVars["PER_REPO_WIF_REPOS"])
+	// Must also preserve other env vars from traffic-serving revision.
+	assert.Equal(t, "existing-org", fake.lastUpdateServiceEnvVars["ALLOWED_ORGS"])
+}
+
 // --- RemoveOrgFromMint tests ---
 
 func TestRemoveOrgFromMint_RemovesOrgAndRoles(t *testing.T) {
@@ -3044,6 +3067,37 @@ func TestRemoveOrgFromMint_LowercasesOrg(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "", fake.lastUpdateServiceEnvVars["ALLOWED_ORGS"])
+}
+
+func TestRemoveOrgFromMint_ReadsFromTrafficServingRevision(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		URI: "https://mint.example.com",
+		// Template has stale/empty data.
+		EnvVars: map[string]string{},
+	}
+	// Traffic-serving revision has the real data.
+	fake.trafficEnvVars = map[string]string{
+		"ALLOWED_ORGS":  "acme,keep-org,remove-org",
+		"ROLE_APP_IDS":  `{"acme/coder":"111","keep-org/coder":"222","remove-org/coder":"333"}`,
+		"ALLOWED_ROLES": "coder",
+	}
+
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
+	err := p.RemoveOrgFromMint(context.Background(), "remove-org")
+	require.NoError(t, err)
+	assert.Contains(t, fake.calls, "GetServiceTrafficEnvVars")
+
+	// Remaining orgs must be preserved from traffic-serving revision.
+	assert.Contains(t, fake.lastUpdateServiceEnvVars["ALLOWED_ORGS"], "acme")
+	assert.Contains(t, fake.lastUpdateServiceEnvVars["ALLOWED_ORGS"], "keep-org")
+	assert.NotContains(t, fake.lastUpdateServiceEnvVars["ALLOWED_ORGS"], "remove-org")
+
+	var roleAppIDs map[string]string
+	require.NoError(t, json.Unmarshal([]byte(fake.lastUpdateServiceEnvVars["ROLE_APP_IDS"]), &roleAppIDs))
+	assert.Equal(t, "111", roleAppIDs["acme/coder"])
+	assert.Equal(t, "222", roleAppIDs["keep-org/coder"])
+	assert.NotContains(t, roleAppIDs, "remove-org/coder")
 }
 
 func TestRemoveOrgFromMint_UpdateFails(t *testing.T) {
@@ -3125,6 +3179,28 @@ func TestRemoveRepoFromMint_FunctionNotFound(t *testing.T) {
 	err := p.RemoveRepoFromMint(context.Background(), "acme/repo")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mint function not found")
+}
+
+func TestRemoveRepoFromMint_ReadsFromTrafficServingRevision(t *testing.T) {
+	fake := newFakeGCFClient()
+	fake.functionInfo = &FunctionInfo{
+		URI: "https://mint.example.com",
+		// Template has stale/empty data.
+		EnvVars: map[string]string{},
+	}
+	// Traffic-serving revision has the real data.
+	fake.trafficEnvVars = map[string]string{
+		"PER_REPO_WIF_REPOS": "acme/keep-repo,acme/remove-repo",
+		"ALLOWED_ORGS":       "acme",
+	}
+
+	p := NewProvisioner(Config{ProjectID: "proj1", Region: "us-central1"}, fake)
+	err := p.RemoveRepoFromMint(context.Background(), "acme/remove-repo")
+	require.NoError(t, err)
+	assert.Contains(t, fake.calls, "GetServiceTrafficEnvVars")
+	assert.Equal(t, "acme/keep-repo", fake.lastUpdateServiceEnvVars["PER_REPO_WIF_REPOS"])
+	// Must preserve other env vars from traffic-serving revision.
+	assert.Equal(t, "acme", fake.lastUpdateServiceEnvVars["ALLOWED_ORGS"])
 }
 
 func TestRemoveRepoFromMint_LowercasesRepo(t *testing.T) {
