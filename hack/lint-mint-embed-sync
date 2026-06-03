@@ -14,7 +14,7 @@ DST="$REPO_ROOT/internal/dispatch/gcf/mintsrc"
 
 rc=0
 for f in main.go go.mod go.sum; do
-    if ! diff -q "$SRC/$f" "$DST/$f.embed" >/dev/null 2>&1; then
+    if ! cmp -s "$SRC/$f" "$DST/$f.embed"; then
         echo "DESYNC: internal/mint/$f != internal/dispatch/gcf/mintsrc/$f.embed" >&2
         rc=1
     fi
