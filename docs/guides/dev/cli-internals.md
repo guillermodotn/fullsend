@@ -272,7 +272,7 @@ Per-repo mode does not use the layer stack — it runs the same phases inline in
 │  ┌──────────────────────────────────────────┐                   │
 │  │ bootstrapSandbox()                       │                   │
 │  │                                          │                   │
-│  │  Upload to /tmp/workspace:               │                   │
+│  │  Upload to /sandbox/workspace:           │                   │
 │  │  ├── fullsend binary (cross-compiled)    │                   │
 │  │  ├── agent definition file               │                   │
 │  │  ├── skills/ directory                   │                   │
@@ -282,8 +282,8 @@ Per-repo mode does not use the layer stack — it runs the same phases inline in
 │  │  └── security hooks                      │                   │
 │  │                                          │                   │
 │  │  bootstrapEnv() writes:                  │                   │
-│  │  ├── PATH=/tmp/workspace/bin:$PATH       │                   │
-│  │  ├── CLAUDE_CONFIG_DIR=/tmp/claude-config│                   │
+│  │  ├── PATH=/sandbox/workspace/bin:$PATH   │                   │
+│  │  ├── CLAUDE_CONFIG_DIR=/sandbox/claude-config│               │
 │  │  ├── FULLSEND_OUTPUT_DIR=...             │                   │
 │  │  └── sources .env.d/*.env files          │                   │
 │  └──────────┬───────────────────────────────┘                   │
@@ -344,8 +344,8 @@ Per-repo mode does not use the layer stack — it runs the same phases inline in
 ### Sandbox Constants
 
 ```go
-SandboxWorkspace    = "/tmp/workspace"
-SandboxClaudeConfig = "/tmp/claude-config"
+SandboxWorkspace    = "/sandbox/workspace"
+SandboxClaudeConfig = "/sandbox/claude-config"
 ```
 
 ### Key Sandbox Operations

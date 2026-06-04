@@ -14,9 +14,9 @@ import (
 
 const (
 	// SandboxWorkspace is the workspace directory inside the sandbox.
-	SandboxWorkspace = "/tmp/workspace" //nolint:gosec // not a credential
+	SandboxWorkspace = "/sandbox/workspace" //nolint:gosec // not a credential
 	// SandboxClaudeConfig is the Claude config directory inside the sandbox.
-	SandboxClaudeConfig = "/tmp/claude-config" //nolint:gosec // not a credential
+	SandboxClaudeConfig = "/sandbox/claude-config" //nolint:gosec // not a credential
 
 	readyTimeout    = 120 * time.Second
 	readyPoll       = 2 * time.Second
@@ -377,6 +377,66 @@ func Upload(sandboxName, localPath, remotePath string) error {
 	return nil
 }
 
+// shellQuote wraps s in single quotes with internal single quotes escaped,
+// making it safe to interpolate into a sh -c command string.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// UploadFile copies a single local file into a sandbox at a specific remote path.
+// It checks if the remotePath is a file and if it is not it tries to fix it. This is
+// because of `openshell sandbox upload` in a git environment. Check
+// https://github.com/NVIDIA/OpenShell/issues/1740 for more information. When that gets
+// addressed, this can go away.
+func UploadFile(sandboxName, localPath, remotePath string) error {
+	if err := Upload(sandboxName, localPath, remotePath); err != nil {
+		return err
+	}
+
+	_, _, exitCode, err := Exec(sandboxName, fmt.Sprintf("test -f %s", shellQuote(remotePath)), 1*time.Second)
+	if err != nil {
+		return err
+	}
+
+	if exitCode != 0 {
+		wrongPath := fmt.Sprintf("%s/%s", remotePath, filepath.Base(localPath))
+		_, _, exitCode, err := Exec(sandboxName, fmt.Sprintf("test -f %s", shellQuote(wrongPath)), 1*time.Second)
+		if err != nil {
+			return err
+		}
+
+		if exitCode != 0 {
+			return fmt.Errorf("checking for file: %s", wrongPath)
+		}
+
+		tmpPath := fmt.Sprintf("/tmp/%s", filepath.Base(remotePath))
+		stdout, stderr, exitCode, err := Exec(sandboxName, fmt.Sprintf("mv %s %s", shellQuote(wrongPath), shellQuote(tmpPath)), 1*time.Second)
+		if err != nil {
+			return err
+		}
+		if exitCode != 0 {
+			return fmt.Errorf("fixing UploadFile path: %s, %s", stdout, stderr)
+		}
+
+		stdout, stderr, exitCode, err = Exec(sandboxName, fmt.Sprintf("rm -r %s", shellQuote(remotePath)), 1*time.Second)
+		if err != nil {
+			return err
+		}
+		if exitCode != 0 {
+			return fmt.Errorf("fixing UploadFile path: %s, %s", stdout, stderr)
+		}
+
+		stdout, stderr, exitCode, err = Exec(sandboxName, fmt.Sprintf("mv %s %s", shellQuote(tmpPath), shellQuote(remotePath)), 1*time.Second)
+		if err != nil {
+			return err
+		}
+		if exitCode != 0 {
+			return fmt.Errorf("fixing UploadFile path: %s, %s", stdout, stderr)
+		}
+	}
+	return nil
+}
+
 // UploadDir uploads a local directory into a sandbox, preserving symlinks.
 // openshell sandbox upload dereferences symlinks; this builds a local tarball
 // with --no-dereference, uploads it, and extracts it in the sandbox.
@@ -478,8 +538,8 @@ func CollectLogs(name, source string) (string, error) {
 }
 
 const (
-	podmanLogTimeout  = 15 * time.Second
-	maxContainerLogs  = 1 << 20 // 1 MB
+	podmanLogTimeout   = 15 * time.Second
+	maxContainerLogs   = 1 << 20 // 1 MB
 	podmanLogTailLines = "200"
 )
 

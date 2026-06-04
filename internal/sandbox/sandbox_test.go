@@ -21,8 +21,8 @@ func TestEnsureAvailable_OpenshellNotInPath(t *testing.T) {
 }
 
 func TestConstants(t *testing.T) {
-	assert.Equal(t, "/tmp/workspace", SandboxWorkspace)
-	assert.Equal(t, "/tmp/claude-config", SandboxClaudeConfig)
+	assert.Equal(t, "/sandbox/workspace", SandboxWorkspace)
+	assert.Equal(t, "/sandbox/claude-config", SandboxClaudeConfig)
 }
 
 func TestBuildProviderArgs_BareKeyCredentials(t *testing.T) {
@@ -378,10 +378,21 @@ func TestEffectiveReadyTimeout_EnvVarCappedAtMax(t *testing.T) {
 	assert.Equal(t, maxReadyTimeout, got)
 }
 
+func TestUploadFile_OpenshellNotInPath(t *testing.T) {
+	tmp := t.TempDir()
+	f := filepath.Join(tmp, "test.txt")
+	require.NoError(t, os.WriteFile(f, []byte("hello"), 0o644))
+
+	t.Setenv("PATH", "")
+
+	err := UploadFile("test-sandbox", f, "/sandbox/workspace/test.txt")
+	assert.Error(t, err)
+}
+
 func TestUploadDir_OpenshellNotInPath(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PATH", "")
 
-	err := UploadDir("test-sandbox", dir, "/tmp/workspace/repo")
+	err := UploadDir("test-sandbox", dir, "/sandbox/workspace/repo")
 	assert.Error(t, err)
 }
