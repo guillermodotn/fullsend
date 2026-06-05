@@ -232,6 +232,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				log.Printf("WARNING: permission level mismatch: %s requested=%s granted=%s", perm, reqLevel, level)
 			}
 		}
+		for perm, reqLevel := range requested {
+			if _, ok := granted.Permissions[perm]; !ok {
+				log.Printf("WARNING: requested permission not granted: %s=%s", perm, reqLevel)
+			}
+		}
 	}
 
 	resp := mintResponse{
