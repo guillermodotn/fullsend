@@ -26,7 +26,7 @@ Follow these steps in order.
 Releases should be cut from `main`. Verify you are on `main` and up to date:
 
 ```
-git checkout main && git pull
+git checkout main && git pull --tags --force
 ```
 
 ### 2. Determine the version

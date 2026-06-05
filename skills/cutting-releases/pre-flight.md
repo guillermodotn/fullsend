@@ -9,7 +9,7 @@ and to identify what needs post-flight verification.
 Start by fetching the latest remote state:
 
 ```
-git fetch origin
+git fetch origin --tags --force
 ```
 
 ## A. Audit reusable workflow changes
