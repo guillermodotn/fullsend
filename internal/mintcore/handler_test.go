@@ -13,6 +13,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"net/http/httptest"
@@ -657,6 +658,17 @@ func TestHandler_FullFlow(t *testing.T) {
 			json.NewEncoder(w).Encode(installationTokenResponse{
 				Token:     "ghs_test_token",
 				ExpiresAt: "2026-05-06T12:00:00Z",
+				Permissions: map[string]string{
+					"contents":      "write",
+					"pull_requests": "write",
+					"issues":        "write",
+					"checks":        "read",
+					"metadata":      "read",
+				},
+				Repositories: []installationTokenRepository{
+					{FullName: "test-org/test-repo"},
+				},
+				RepositorySelection: "selected",
 			})
 		default:
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -683,6 +695,80 @@ func TestHandler_FullFlow(t *testing.T) {
 	}
 	if resp.ExpiresAt != "2026-05-06T12:00:00Z" {
 		t.Fatalf("expected expires_at=2026-05-06T12:00:00Z, got %s", resp.ExpiresAt)
+	}
+	if len(resp.GrantedRepos) != 1 || resp.GrantedRepos[0] != "test-org/test-repo" {
+		t.Fatalf("expected granted_repos=[test-org/test-repo], got %v", resp.GrantedRepos)
+	}
+	if resp.RepoSelection != "selected" {
+		t.Fatalf("expected repository_selection=selected, got %s", resp.RepoSelection)
+	}
+	if resp.GrantedPerms["contents"] != "write" {
+		t.Fatalf("expected granted_permissions to include contents=write, got %v", resp.GrantedPerms)
+	}
+}
+
+func TestHandler_FullFlowGrantedScopeAll(t *testing.T) {
+	t.Setenv("ROLE_APP_IDS", `{"test-org/coder":"200"}`)
+
+	pemData, err := generateTestRSAKey()
+	if err != nil {
+		t.Fatalf("generating test key: %v", err)
+	}
+
+	env := newTestOIDCEnv(t, &fakePEMAccessor{
+		pems: map[string][]byte{"test-org/coder": pemData},
+	})
+	token := env.signToken(t, nil)
+
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/test-org/test-repo/installation" && r.Method == http.MethodGet:
+			json.NewEncoder(w).Encode(installationResponse{
+				ID: 12345, Account: struct {
+					Login string `json:"login"`
+				}{Login: "test-org"},
+			})
+		case strings.HasPrefix(r.URL.Path, "/app/installations/12345/access_tokens") && r.Method == http.MethodPost:
+			w.WriteHeader(http.StatusCreated)
+			// Simulate GitHub returning repository_selection "all" with no
+			// repositories array — the scenario #1916 is investigating.
+			json.NewEncoder(w).Encode(installationTokenResponse{
+				Token:               "ghs_all_repos_token",
+				ExpiresAt:           "2026-05-06T12:00:00Z",
+				Permissions:         map[string]string{"contents": "read", "issues": "write", "metadata": "read"},
+				RepositorySelection: "all",
+			})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer github.Close()
+	env.handler.githubBaseURL = github.URL
+
+	body := `{"role":"coder","repos":["test-repo"]}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/token", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp mintResponse
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.Token != "ghs_all_repos_token" {
+		t.Fatalf("expected token=ghs_all_repos_token, got %s", resp.Token)
+	}
+	if resp.RepoSelection != "all" {
+		t.Fatalf("expected repository_selection=all, got %s", resp.RepoSelection)
+	}
+	if len(resp.GrantedRepos) != 0 {
+		t.Fatalf("expected empty granted_repos for selection=all, got %v", resp.GrantedRepos)
+	}
+	if resp.GrantedPerms["issues"] != "write" {
+		t.Fatalf("expected granted_permissions to include issues=write, got %v", resp.GrantedPerms)
 	}
 }
 
@@ -1757,5 +1843,68 @@ func TestHandler_STSVerifier_PerRepoWIF_RestrictedWorkflows(t *testing.T) {
 
 	if rec2.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 for disallowed per-repo workflow via STS, got %d: %s", rec2.Code, rec2.Body.String())
+	}
+}
+
+func TestHandler_LogsRequestedPermissionNotGranted(t *testing.T) {
+	t.Setenv("ROLE_APP_IDS", `{"test-org/coder":"200"}`)
+
+	pemData, err := generateTestRSAKey()
+	if err != nil {
+		t.Fatalf("generating test key: %v", err)
+	}
+
+	env := newTestOIDCEnv(t, &fakePEMAccessor{
+		pems: map[string][]byte{"test-org/coder": pemData},
+	})
+	token := env.signToken(t, nil)
+
+	// Simulate GitHub granting only a subset of the coder role's permissions:
+	// contents and metadata are granted, but pull_requests, issues, and checks
+	// are missing.
+	github := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/test-org/test-repo/installation" && r.Method == http.MethodGet:
+			json.NewEncoder(w).Encode(installationResponse{
+				ID: 12345, Account: struct {
+					Login string `json:"login"`
+				}{Login: "test-org"},
+			})
+		case strings.HasPrefix(r.URL.Path, "/app/installations/12345/access_tokens") && r.Method == http.MethodPost:
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(installationTokenResponse{
+				Token:       "ghs_partial",
+				ExpiresAt:   "2026-05-06T12:00:00Z",
+				Permissions: map[string]string{"contents": "write", "metadata": "read"},
+			})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer github.Close()
+	env.handler.githubBaseURL = github.URL
+
+	// Capture log output.
+	var logBuf bytes.Buffer
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(os.Stderr)
+
+	body := `{"role":"coder","repos":["test-repo"]}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/token", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	logs := logBuf.String()
+	for _, perm := range []string{"pull_requests", "issues", "checks"} {
+		expected := fmt.Sprintf("WARNING: requested permission not granted: %s=", perm)
+		if !strings.Contains(logs, expected) {
+			t.Errorf("expected log to contain %q, got:\n%s", expected, logs)
+		}
 	}
 }
