@@ -365,30 +365,8 @@ Files over 64KB save fine if they contain only ASCII characters.`
 
 	// If the run failed, save logs and artifacts for debugging.
 	if finalRun.Conclusion != "success" {
-		runURL := fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d", env.org, forge.ConfigRepoName, finalRun.ID)
-		fmt.Fprintf(os.Stderr, "::notice::Triage workflow run %d failed (conclusion: %s). Downloading debug artifacts. Run URL: %s\n", finalRun.ID, finalRun.Conclusion, runURL)
-
-		debugDir := filepath.Join(env.screenshotDir, fmt.Sprintf("triage-run-%d", finalRun.ID))
-		_ = os.MkdirAll(debugDir, 0o755)
-
-		// Save workflow logs.
-		logs, logErr := env.client.GetWorkflowRunLogs(ctx, env.org, forge.ConfigRepoName, finalRun.ID)
-		if logErr != nil {
-			t.Logf("Could not fetch run logs: %v", logErr)
-		} else {
-			logPath := filepath.Join(debugDir, "workflow-logs.txt")
-			if writeErr := os.WriteFile(logPath, []byte(logs), 0o644); writeErr != nil {
-				t.Logf("Could not write logs to %s: %v", logPath, writeErr)
-			} else {
-				fmt.Fprintf(os.Stderr, "::notice file=%s::Triage run %d workflow logs saved\n", logPath, finalRun.ID)
-			}
-			t.Logf("Workflow run logs:\n%s", logs)
-		}
-
-		// Download run artifacts (transcripts, etc).
-		downloadRunArtifacts(ctx, env.token, env.org, forge.ConfigRepoName, finalRun.ID, debugDir, t)
-
-		t.Fatalf("Triage workflow run %d concluded with %q, expected success. Debug artifacts saved to %s", finalRun.ID, finalRun.Conclusion, debugDir)
+		saveWorkflowRunDebugInfo(t, env, "triage", finalRun)
+		t.Fatalf("Triage workflow run %d concluded with %q, expected success", finalRun.ID, finalRun.Conclusion)
 	}
 
 	// Verify the triage agent posted a comment on the issue.
@@ -440,10 +418,37 @@ Files over 64KB save fine if they contain only ASCII characters.`
 		"issue should have a triage label (needs-info, ready-to-code, duplicate, or blocked), got: %v", labelNames)
 }
 
+// saveWorkflowRunDebugInfo fetches logs and artifacts for a failed workflow run
+// and saves them to the screenshot directory. Use this from any test phase that
+// watches a workflow run and needs to capture debug info on failure.
+func saveWorkflowRunDebugInfo(t *testing.T, env *e2eEnv, label string, run *forge.WorkflowRun) {
+	t.Helper()
+	ctx := context.Background()
+
+	runURL := fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d", env.org, forge.ConfigRepoName, run.ID)
+	fmt.Fprintf(os.Stderr, "::warning::%s workflow run %d failed (conclusion: %s). Run URL: %s\n", label, run.ID, run.Conclusion, runURL)
+
+	debugDir := filepath.Join(env.screenshotDir, fmt.Sprintf("%s-run-%d", label, run.ID))
+	_ = os.MkdirAll(debugDir, 0o755)
+
+	logs, logErr := env.client.GetWorkflowRunLogs(ctx, env.org, forge.ConfigRepoName, run.ID)
+	if logErr != nil {
+		t.Logf("Could not fetch %s run logs: %v", label, logErr)
+	} else {
+		logPath := filepath.Join(debugDir, "workflow-logs.txt")
+		if writeErr := os.WriteFile(logPath, []byte(logs), 0o644); writeErr != nil {
+			t.Logf("Could not write logs to %s: %v", logPath, writeErr)
+		} else {
+			fmt.Fprintf(os.Stderr, "::warning file=%s::%s run %d workflow logs saved\n", logPath, label, run.ID)
+		}
+		t.Logf("%s workflow run logs:\n%s", label, logs)
+	}
+
+	downloadRunArtifacts(ctx, env.token, env.org, forge.ConfigRepoName, run.ID, debugDir, t)
+}
+
 // downloadRunArtifacts fetches all artifacts from a workflow run and extracts
-// them into destDir. Each artifact is extracted into a subdirectory named after
-// the artifact. This captures transcripts, screenshots, and other debug data
-// that the agent run uploads.
+// them into destDir.
 func downloadRunArtifacts(ctx context.Context, token, org, repo string, runID int, destDir string, t *testing.T) {
 	t.Helper()
 
@@ -584,6 +589,22 @@ func runUnenrollmentTest(t *testing.T, env *e2eEnv) {
 		"admin", "disable", "repos", env.org, testRepo, "--yolo")
 	t.Logf("Disable repos output:\n%s", output)
 
+	// Find the most recent repo-maintenance run so we can capture debug info
+	// if it failed. The CLI already watched it to completion, so it should
+	// exist and be completed.
+	var repoMaintRun *forge.WorkflowRun
+	runs, listErr := env.client.ListWorkflowRuns(ctx, env.org, forge.ConfigRepoName, "repo-maintenance.yml")
+	if listErr != nil {
+		t.Logf("Could not list repo-maintenance runs: %v", listErr)
+	} else if len(runs) > 0 {
+		r := runs[0]
+		repoMaintRun = &r
+		t.Logf("repo-maintenance run %d: status=%s conclusion=%s", r.ID, r.Status, r.Conclusion)
+		if r.Conclusion != "" && r.Conclusion != "success" {
+			saveWorkflowRunDebugInfo(t, env, "repo-maintenance", repoMaintRun)
+		}
+	}
+
 	// The CLI waited for repo-maintenance, so the removal PR should exist.
 	// A few retries handle GitHub eventual consistency.
 	var removalPR *forge.ChangeProposal
@@ -607,6 +628,9 @@ func runUnenrollmentTest(t *testing.T, env *e2eEnv) {
 			break
 		}
 		t.Logf("Attempt %d: removal PR not yet visible", attempt+1)
+	}
+	if removalPR == nil && repoMaintRun != nil && repoMaintRun.Conclusion != "success" {
+		t.Fatalf("removal PR not found for %s; repo-maintenance run %d concluded with %q (debug artifacts saved above)", testRepo, repoMaintRun.ID, repoMaintRun.Conclusion)
 	}
 	require.NotNil(t, removalPR, "removal PR should exist for %s", testRepo)
 	t.Logf("Found removal PR #%d: %s", removalPR.Number, removalPR.URL)
