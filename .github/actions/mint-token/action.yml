@@ -57,12 +57,13 @@ runs:
           -H "Content-Type: application/json" \
           -d "$BODY" \
           "${MINT_URL}/v1/token")
+        echo "::add-mask::$MINT_RESPONSE"
         TOKEN=$(echo "$MINT_RESPONSE" | jq -r '.token')
-        echo "::add-mask::$TOKEN"
         if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
           echo "::error::Token mint returned no token for role=$ROLE"
           exit 1
         fi
+        echo "::add-mask::$TOKEN"
         GRANTED_REPOS=$(echo "$MINT_RESPONSE" | jq -r '.granted_repos | if . then map(strings) | join(",") else empty end')
         GRANTED_PERMS=$(echo "$MINT_RESPONSE" | jq -r '.granted_permissions | if . then to_entries | map("\(.key)=\(.value)") | join(",") else empty end')
         REPO_SELECTION=$(echo "$MINT_RESPONSE" | jq -r '.repository_selection // empty')
