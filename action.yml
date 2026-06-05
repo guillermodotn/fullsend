@@ -246,29 +246,48 @@ runs:
 
     - name: Restore cached sandbox image
       id: sandbox-cache
-      uses: actions/cache@v4
+      uses: actions/cache/restore@v4
       with:
         path: /tmp/sandbox-image.tar
-        key: sandbox-image-${{ runner.os }}-${{ runner.arch }}
+        key: sandbox-image-${{ runner.os }}-${{ runner.arch }}-${{ env.FULLSEND_SANDBOX_IMAGE || 'ghcr.io/fullsend-ai/fullsend-code:latest' }}
+        restore-keys: |
+          sandbox-image-${{ runner.os }}-${{ runner.arch }}-
 
     - name: Load cached sandbox image
       if: steps.sandbox-cache.outputs.cache-hit == 'true'
       shell: bash
-      run: podman load -i /tmp/sandbox-image.tar
+      run: podman load -i /tmp/sandbox-image.tar || echo "::warning::Cached image load failed; will pull fresh"
 
     - name: Pre-pull sandbox image
+      id: sandbox-pull
       shell: bash
       run: |
         IMAGE="${FULLSEND_SANDBOX_IMAGE:-ghcr.io/fullsend-ai/fullsend-code:latest}"
         echo "Pre-pulling sandbox image: ${IMAGE}"
+        DIGEST_BEFORE="$(podman image inspect --format '{{.Digest}}' -- "${IMAGE}" 2>/dev/null || true)"
         timeout 300 podman pull -- "${IMAGE}" || echo "::warning::Image pre-pull failed; sandbox create will pull on demand"
+        DIGEST_AFTER="$(podman image inspect --format '{{.Digest}}' -- "${IMAGE}" 2>/dev/null || true)"
+        if [ "${DIGEST_BEFORE}" != "${DIGEST_AFTER}" ]; then
+          echo "changed=true" >> "${GITHUB_OUTPUT}"
+        fi
 
     - name: Save sandbox image for cache
-      if: steps.sandbox-cache.outputs.cache-hit != 'true'
+      if: steps.sandbox-cache.outputs.cache-hit != 'true' || steps.sandbox-pull.outputs.changed == 'true'
       shell: bash
       run: |
         IMAGE="${FULLSEND_SANDBOX_IMAGE:-ghcr.io/fullsend-ai/fullsend-code:latest}"
-        podman save -o /tmp/sandbox-image.tar "${IMAGE}"
+        if podman image exists -- "${IMAGE}"; then
+          podman save -o /tmp/sandbox-image.tar -- "${IMAGE}"
+        else
+          echo "::warning::Image not available to cache"
+        fi
+
+    - name: Update sandbox image cache
+      if: steps.sandbox-cache.outputs.cache-hit != 'true' || steps.sandbox-pull.outputs.changed == 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: /tmp/sandbox-image.tar
+        key: sandbox-image-${{ runner.os }}-${{ runner.arch }}-${{ env.FULLSEND_SANDBOX_IMAGE || 'ghcr.io/fullsend-ai/fullsend-code:latest' }}
 
     - name: Install validation dependencies
       shell: bash
