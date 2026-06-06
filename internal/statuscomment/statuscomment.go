@@ -167,6 +167,7 @@ func (n *Notifier) analyzeTimeline(ctx context.Context) (agentPosted, startIsLas
 		}
 	}
 	if startIdx < 0 {
+		n.warnf("start comment %d not found on timeline; it may have been deleted externally", n.startCommentID)
 		return false, false, nil
 	}
 
