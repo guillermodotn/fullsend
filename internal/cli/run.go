@@ -738,6 +738,7 @@ func runAgent(ctx context.Context, agentName, fullsendDir, outputBase, targetRep
 				printer.StepWarn("Audit log verification error: " + verifyErr.Error())
 			} else if !cv.Valid {
 				printer.StepFail(fmt.Sprintf("Audit log integrity check FAILED: %s", cv.BrokenMsg))
+				return fmt.Errorf("audit log integrity check failed: %s", cv.BrokenMsg)
 			} else if cv.Entries > 0 {
 				printer.StepDone(fmt.Sprintf("Audit log integrity verified (%d entries)", cv.Entries))
 			}
