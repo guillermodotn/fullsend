@@ -556,10 +556,10 @@ GitHub event ──► SHIM WORKFLOW (fullsend.yml in enrolled repo)
                  ║ │ │                                                       │ │ ║
                  ║ │ │ Created with --from image, --policy code.yaml.        │ │ ║
                  ║ │ │ Bootstrapped via openshell upload/exec:               │ │ ║
-                 ║ │ │   agent def    → /tmp/claude-config/agents/           │ │ ║
-                 ║ │ │   skills       → /tmp/claude-config/skills/           │ │ ║
+                 ║ │ │   agent def    → /sandbox/claude-config/agents/       │ │ ║
+                 ║ │ │   skills       → /sandbox/claude-config/skills/       │ │ ║
                  ║ │ │   .env, host files (GCP creds), security hooks        │ │ ║
-                 ║ │ │   target repo  → /tmp/workspace/target-repo/          │ │ ║
+                 ║ │ │   target repo  → /sandbox/workspace/target-repo/      │ │ ║
                  ║ │ │                                                       │ │ ║
                  ║ │ │ Network policy enforced (L7, per-binary):             │ │ ║
                  ║ │ │   Vertex AI     → claude, node only                   │ │ ║
@@ -585,7 +585,7 @@ GitHub event ──► SHIM WORKFLOW (fullsend.yml in enrolled repo)
                  ║ │ └───────────────────────────────────────────────────────┘ │ ║
                  ║ │                                                           │ ║
                  ║ │ Extracts from destroyed sandbox:                          │ ║
-                 ║ │   /tmp/workspace/output/, JSONL transcripts,              │ ║
+                 ║ │   /sandbox/workspace/output/, JSONL transcripts,          │ ║
                  ║ │   rsync repo back (--no-links, exclude .git/hooks/)       │ ║
                  ║ │                                                           │ ║
                  ║ │ Post-agent secret scan (redact from extracted output).    │ ║
