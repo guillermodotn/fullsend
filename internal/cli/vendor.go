@@ -16,6 +16,11 @@ import (
 
 const vendorArch = binary.DefaultArch
 
+// Vendor install flags replaced the removed --vendor-fullsend-binary flag (binary-only
+// upload). There is no deprecation alias: use --vendor for the full vendored stack, or
+// --vendor with --fullsend-binary for an explicit ELF. The only known caller of the old
+// flag was our e2e suite, updated in this PR to --vendor.
+
 func validateVendorFlags(vendor bool, fullsendBinary, fullsendSource string) error {
 	if fullsendBinary != "" && !vendor {
 		return fmt.Errorf("--fullsend-binary requires --vendor")
