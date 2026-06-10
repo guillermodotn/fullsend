@@ -107,47 +107,47 @@ run_case() {
 }
 
 write_pr "MEMBER" '[]'
-write_timeline '[{"event":"committed","created_at":"2026-06-01T10:00:00Z"}]'
+write_timeline '[{"event":"committed","committer":{"date":"2026-06-01T10:00:00Z"}}]'
 write_events '[]'
 run_case "trusted member author" "true" "trusted_author" "false"
 
 write_pr "OWNER" '[]'
-write_timeline '[{"event":"committed","created_at":"2026-06-01T10:00:00Z"}]'
+write_timeline '[{"event":"committed","committer":{"date":"2026-06-01T10:00:00Z"}}]'
 write_events '[]'
 run_case "trusted owner author" "true" "trusted_author" "false"
 
 write_pr "COLLABORATOR" '[]'
-write_timeline '[{"event":"committed","created_at":"2026-06-01T10:00:00Z"}]'
+write_timeline '[{"event":"committed","committer":{"date":"2026-06-01T10:00:00Z"}}]'
 write_events '[]'
 run_case "trusted collaborator author" "true" "trusted_author" "false"
 
 write_pr "CONTRIBUTOR" '[]'
-write_timeline '[{"event":"committed","created_at":"2026-06-01T10:00:00Z"}]'
+write_timeline '[{"event":"committed","committer":{"date":"2026-06-01T10:00:00Z"}}]'
 write_events '[]'
 run_case "contributor author denied" "false" "unauthorized" "false"
 
 write_pr "MEMBER" '[{"name":"ok-to-test"}]'
-write_timeline '[{"event":"committed","created_at":"2026-06-01T12:00:00Z"}]'
+write_timeline '[{"event":"committed","committer":{"date":"2026-06-01T12:00:00Z"}}]'
 write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z"}]'
 run_case "trusted member ignores stale ok-to-test label" "true" "trusted_author" "false"
 
 write_pr "NONE" '[{"name":"ok-to-test"}]'
-write_timeline '[{"event":"committed","created_at":"2026-06-01T10:00:00Z"}]'
+write_timeline '[{"event":"committed","committer":{"date":"2026-06-01T10:00:00Z"}}]'
 write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z"}]'
 run_case "fresh ok-to-test label" "true" "ok_to_test" "false"
 
 write_pr "NONE" '[{"name":"ok-to-test"}]'
-write_timeline '[{"event":"committed","created_at":"2026-06-01T12:00:00Z"}]'
+write_timeline '[{"event":"committed","committer":{"date":"2026-06-01T12:00:00Z"}}]'
 write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z"}]'
 run_case "stale ok-to-test label" "false" "stale_ok_to_test" "true"
 
 write_pr "NONE" '[{"name":"ok-to-test"}]'
-write_timeline '[{"event":"committed","created_at":"2026-06-01T12:00:00Z"}]'
+write_timeline '[{"event":"committed","committer":{"date":"2026-06-01T12:00:00Z"}}]'
 write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T12:00:00Z"}]'
 run_case "ok-to-test label at push time is stale" "false" "stale_ok_to_test" "true"
 
 write_pr "NONE" '[{"name":"ok-to-test"}]'
-write_timeline '[{"event":"committed","created_at":"2026-06-01T12:00:00Z"}]'
+write_timeline '[{"event":"committed","committer":{"date":"2026-06-01T12:00:00Z"}}]'
 write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z"}]'
 unset CHECK_E2E_AUTH_DRY_RUN
 run_case "stale ok-to-test removes label" "false" "stale_ok_to_test" "true"
@@ -160,15 +160,19 @@ fi
 export CHECK_E2E_AUTH_DRY_RUN="true"
 
 write_pr "NONE" '[]'
-write_timeline '[{"event":"committed","created_at":"2026-06-01T10:00:00Z"}]'
+write_timeline '[{"event":"committed","committer":{"date":"2026-06-01T10:00:00Z"}}]'
 write_events '[]'
 run_case "untrusted author without label" "false" "unauthorized" "false"
 
 write_pr "NONE" '[{"name":"ok-to-test"}]'
-write_commits '["2020-01-01T00:00:00Z"]'
-write_timeline '[{"event":"committed","created_at":"2026-06-01T12:00:00Z"}]'
+write_timeline '[{"event":"committed","committer":{"date":"2026-06-01T12:00:00Z"}}]'
 write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z"}]'
-run_case "backdated committer date does not bypass timeline push time" "false" "stale_ok_to_test" "true"
+run_case "timeline committer date used for push time" "false" "stale_ok_to_test" "true"
+
+write_pr "NONE" '[{"name":"ok-to-test"}]'
+write_timeline '[{"event":"head_ref_force_pushed","created_at":"2026-06-01T10:00:00Z"}]'
+write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z"}]'
+run_case "head_ref_force_pushed created_at authorizes fresh ok-to-test" "true" "ok_to_test" "false"
 
 write_pr "NONE" '[]'
 write_timeline '[]'

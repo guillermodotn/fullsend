@@ -58,6 +58,7 @@ jobs:
       github.event_name == 'pull_request_target' &&
       (github.event.action != 'labeled' || github.event.label.name == 'ok-to-test')
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: write
@@ -65,6 +66,8 @@ jobs:
       authorized: ${{ steps.auth.outputs.authorized }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}  # Base branch only — never checkout PR head in gate
 
       - name: Check PR authorization
         id: auth

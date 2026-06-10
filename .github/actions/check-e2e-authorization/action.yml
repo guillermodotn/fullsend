@@ -86,8 +86,9 @@ runs:
         body+="
         See [E2E testing guide](${DOCS_URL}) for details."
 
+        bot_login="$(gh api user --jq .login)"
         existing_id="$(gh api "repos/${owner}/${repo}/issues/${PR_NUMBER}/comments" --paginate \
-          --jq ".[] | select(.body | contains(\"${marker}\")) | .id" | head -n1 || true)"
+          --jq ".[] | select(.user.login == \"${bot_login}\" and (.body | contains(\"${marker}\"))) | .id" | head -n1 || true)"
 
         if [[ -n "${existing_id}" ]]; then
           jq -n --arg body "${body}" '{body: $body}' | \
@@ -111,8 +112,9 @@ runs:
         owner="${REPOSITORY%%/*}"
         repo="${REPOSITORY#*/}"
 
+        bot_login="$(gh api user --jq .login)"
         existing_id="$(gh api "repos/${owner}/${repo}/issues/${PR_NUMBER}/comments" --paginate \
-          --jq ".[] | select(.body | contains(\"${marker}\")) | .id" | head -n1 || true)"
+          --jq ".[] | select(.user.login == \"${bot_login}\" and (.body | contains(\"${marker}\"))) | .id" | head -n1 || true)"
 
         if [[ -n "${existing_id}" ]]; then
           body="${marker}
