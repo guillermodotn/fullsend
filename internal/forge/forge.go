@@ -161,6 +161,11 @@ type Client interface {
 	GetFileContent(ctx context.Context, owner, repo, path string) ([]byte, error)
 	DeleteFile(ctx context.Context, owner, repo, path, message string) error
 
+	// DeleteFiles atomically removes multiple paths in a single commit via the
+	// Git Trees API. Missing paths are skipped. Returns the number of paths
+	// removed, or (0, nil) when none of the paths exist.
+	DeleteFiles(ctx context.Context, owner, repo, message string, paths []string) (deleted int, err error)
+
 	// CommitFiles atomically commits multiple files to the repository's
 	// default branch in a single commit. It is idempotent: if all files
 	// already have the expected content and mode, no commit is created

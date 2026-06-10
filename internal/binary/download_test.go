@@ -627,5 +627,18 @@ func TestExtractSourceTreeExtractsSmallFile(t *testing.T) {
 	assert.Equal(t, content, data)
 }
 
+func TestCopyDirContentsPreservesMode(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+	script := filepath.Join(src, "run.sh")
+	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\n"), 0o755))
+
+	require.NoError(t, copyDirContents(src, dst))
+
+	info, err := os.Stat(filepath.Join(dst, "run.sh"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm())
+}
+
 // Ensure io is used in download tests.
 var _ = io.Discard

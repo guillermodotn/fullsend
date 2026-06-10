@@ -3,7 +3,6 @@ package layers
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/fullsend-ai/fullsend/internal/binary"
 	"github.com/fullsend-ai/fullsend/internal/forge"
@@ -94,29 +93,11 @@ func (l *VendorBinaryLayer) Install(ctx context.Context) error {
 		return fmt.Errorf("resolving vendored cleanup paths: %w", err)
 	}
 
-	var removed int
-	for _, p := range paths {
-		_, err := l.client.GetFileContent(ctx, l.org, l.repo, p)
-		if err != nil {
-			if forge.IsNotFound(err) {
-				continue
-			}
-			return fmt.Errorf("checking for vendored content at %s: %w", p, err)
-		}
-		l.ui.StepStart("removing stale vendored content")
-		deleteMsg := RemoveStaleContentCommitMessage(p)
-		if p == l.binaryPath() {
-			deleteMsg = RemoveStaleBinaryCommitMessage(p)
-		}
-		if err := l.client.DeleteFile(ctx, l.org, l.repo, p, deleteMsg); err != nil {
-			if p == l.binaryPath() {
-				l.ui.StepFail("failed to remove vendored binary")
-				return fmt.Errorf("deleting vendored binary: %w", err)
-			}
-			l.ui.StepFail("failed to remove vendored content")
-			return fmt.Errorf("deleting vendored content at %s: %w", p, err)
-		}
-		removed++
+	l.ui.StepStart("removing stale vendored content")
+	removed, err := DeleteVendoredPaths(ctx, l.client, l.org, l.repo, paths)
+	if err != nil {
+		l.ui.StepFail("failed to remove vendored content")
+		return fmt.Errorf("deleting vendored content: %w", err)
 	}
 	if removed > 0 {
 		l.ui.StepDone(fmt.Sprintf("removed %d stale vendored files", removed))
@@ -269,10 +250,16 @@ func (l *VendorBinaryLayer) reportSourceAlignment(ctx context.Context, report *L
 }
 
 func containsWouldFix(fixes []string, path string) bool {
-	suffix := path
-	for _, f := range fixes {
-		if strings.HasSuffix(f, suffix) {
-			return true
+	candidates := []string{
+		"restore vendored path " + path,
+		"sync vendored path " + path,
+		"restore vendored binary at " + path,
+	}
+	for _, want := range candidates {
+		for _, f := range fixes {
+			if f == want {
+				return true
+			}
 		}
 	}
 	return false

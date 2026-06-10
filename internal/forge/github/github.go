@@ -748,6 +748,134 @@ func (c *LiveClient) CommitFiles(ctx context.Context, owner, repo, message strin
 	return true, nil
 }
 
+// DeleteFiles atomically removes paths from the repository default branch.
+func (c *LiveClient) DeleteFiles(ctx context.Context, owner, repo, message string, paths []string) (int, error) {
+	if len(paths) == 0 {
+		return 0, nil
+	}
+
+	repoResp, err := c.get(ctx, fmt.Sprintf("/repos/%s/%s", owner, repo))
+	if err != nil {
+		return 0, fmt.Errorf("get repo: %w", err)
+	}
+	var repoInfo struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	if err := decodeJSON(repoResp, &repoInfo); err != nil {
+		return 0, fmt.Errorf("decode repo info: %w", err)
+	}
+
+	var commitSHA string
+	if err := c.retryOnTransient(ctx, "get branch ref", func() error {
+		refResp, refErr := c.get(ctx, fmt.Sprintf("/repos/%s/%s/git/ref/heads/%s", owner, repo, repoInfo.DefaultBranch))
+		if refErr != nil {
+			return fmt.Errorf("get branch ref: %w", refErr)
+		}
+		var ref struct {
+			Object struct {
+				SHA string `json:"sha"`
+			} `json:"object"`
+		}
+		if decErr := decodeJSON(refResp, &ref); decErr != nil {
+			return fmt.Errorf("decode ref: %w", decErr)
+		}
+		commitSHA = ref.Object.SHA
+		return nil
+	}); err != nil {
+		return 0, err
+	}
+
+	cResp, err := c.get(ctx, fmt.Sprintf("/repos/%s/%s/git/commits/%s", owner, repo, commitSHA))
+	if err != nil {
+		return 0, fmt.Errorf("get commit: %w", err)
+	}
+	var commitObj struct {
+		Tree struct {
+			SHA string `json:"sha"`
+		} `json:"tree"`
+	}
+	if err := decodeJSON(cResp, &commitObj); err != nil {
+		return 0, fmt.Errorf("decode commit: %w", err)
+	}
+	baseTreeSHA := commitObj.Tree.SHA
+
+	treeResp, err := c.get(ctx, fmt.Sprintf("/repos/%s/%s/git/trees/%s?recursive=1", owner, repo, baseTreeSHA))
+	if err != nil {
+		return 0, fmt.Errorf("get tree: %w", err)
+	}
+	var existingTree struct {
+		Tree []struct {
+			Path string `json:"path"`
+		} `json:"tree"`
+		Truncated bool `json:"truncated"`
+	}
+	if err := decodeJSON(treeResp, &existingTree); err != nil {
+		return 0, fmt.Errorf("decode tree: %w", err)
+	}
+	if existingTree.Truncated {
+		return 0, fmt.Errorf("tree too large (truncated); cannot delete")
+	}
+
+	existing := make(map[string]struct{}, len(existingTree.Tree))
+	for _, entry := range existingTree.Tree {
+		existing[entry.Path] = struct{}{}
+	}
+
+	var deleteEntries []map[string]any
+	for _, path := range paths {
+		if _, ok := existing[path]; !ok {
+			continue
+		}
+		deleteEntries = append(deleteEntries, map[string]any{
+			"path": path,
+			"sha":  nil,
+		})
+	}
+	if len(deleteEntries) == 0 {
+		return 0, nil
+	}
+
+	treePayload := map[string]any{
+		"base_tree": baseTreeSHA,
+		"tree":      deleteEntries,
+	}
+	newTreeResp, err := c.post(ctx, fmt.Sprintf("/repos/%s/%s/git/trees", owner, repo), treePayload)
+	if err != nil {
+		return 0, fmt.Errorf("create tree: %w", err)
+	}
+	var newTree struct {
+		SHA string `json:"sha"`
+	}
+	if err := decodeJSON(newTreeResp, &newTree); err != nil {
+		return 0, fmt.Errorf("decode new tree: %w", err)
+	}
+
+	commitPayload := map[string]any{
+		"message": message,
+		"tree":    newTree.SHA,
+		"parents": []string{commitSHA},
+	}
+	newCommitResp, err := c.post(ctx, fmt.Sprintf("/repos/%s/%s/git/commits", owner, repo), commitPayload)
+	if err != nil {
+		return 0, fmt.Errorf("create commit: %w", err)
+	}
+	var newCommit struct {
+		SHA string `json:"sha"`
+	}
+	if err := decodeJSON(newCommitResp, &newCommit); err != nil {
+		return 0, fmt.Errorf("decode new commit: %w", err)
+	}
+
+	refPayload := map[string]string{"sha": newCommit.SHA}
+	refUpdateResp, err := c.patch(ctx, fmt.Sprintf("/repos/%s/%s/git/refs/heads/%s", owner, repo, repoInfo.DefaultBranch), refPayload)
+	if err != nil {
+		return 0, fmt.Errorf("update ref: %w", err)
+	}
+	refUpdateResp.Body.Close()
+
+	return len(deleteEntries), nil
+}
+
 // blobSHA computes the Git blob object SHA-1 for the given content.
 func blobSHA(content []byte) string {
 	h := sha1.New()

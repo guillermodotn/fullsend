@@ -278,7 +278,11 @@ func copyDirContents(src, dst string) error {
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
 		}
-		return os.WriteFile(target, data, 0o644)
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode().Perm())
 	})
 }
 

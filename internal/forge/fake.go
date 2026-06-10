@@ -382,6 +382,32 @@ func (f *FakeClient) DeleteFile(_ context.Context, owner, repo, path, message st
 	return nil
 }
 
+func (f *FakeClient) DeleteFiles(_ context.Context, owner, repo, message string, paths []string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if e := f.err("DeleteFiles"); e != nil {
+		return 0, e
+	}
+
+	var deleted int
+	for _, path := range paths {
+		key := owner + "/" + repo + "/" + path
+		if _, ok := f.FileContents[key]; !ok {
+			continue
+		}
+		delete(f.FileContents, key)
+		f.DeletedFiles = append(f.DeletedFiles, FileRecord{
+			Owner:   owner,
+			Repo:    repo,
+			Path:    path,
+			Message: message,
+		})
+		deleted++
+	}
+	return deleted, nil
+}
+
 func (f *FakeClient) CommitFiles(_ context.Context, owner, repo, message string, files []TreeFile) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

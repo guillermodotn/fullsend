@@ -84,45 +84,62 @@ type VendorOpts struct {
 // ResolveForVendor obtains a Linux binary using the vendoring policy:
 // cross-compile from resolved source root → matching release (released CLI only) → fail.
 func ResolveForVendor(opts VendorOpts) (AcquireResult, error) {
+	root, rootErr := ResolveVendorRoot(opts.SourceDir, opts.Version)
+	if rootErr != nil {
+		return resolveForVendorWithoutRoot(opts, rootErr)
+	}
+	if root.Cleanup != nil {
+		defer root.Cleanup()
+	}
+	return ResolveForVendorFromRoot(root.Path, opts.Version, opts.Arch)
+}
+
+// ResolveForVendorFromRoot cross-compiles from an already-resolved source tree,
+// falling back to release download when cross-compilation is unavailable.
+func ResolveForVendorFromRoot(rootPath, version, arch string) (AcquireResult, error) {
 	tmpDir, err := os.MkdirTemp("", "fullsend-linux-*")
 	if err != nil {
 		return AcquireResult{}, fmt.Errorf("creating temp dir: %w", err)
 	}
 	binaryPath := filepath.Join(tmpDir, "fullsend")
 
-	root, rootErr := ResolveVendorRoot(opts.SourceDir, opts.Version)
-	if rootErr == nil {
-		if root.Cleanup != nil {
-			defer root.Cleanup()
-		}
-		fmt.Fprintf(os.Stderr, "Cross-compiling fullsend for linux/%s...\n", opts.Arch)
-		if ccErr := CrossCompile(CrossCompileOpts{
-			Version:      opts.Version,
-			Arch:         opts.Arch,
-			DestPath:     binaryPath,
-			VersionStamp: "-vendored",
-			SourceDir:    root.Path,
-		}); ccErr == nil {
-			fmt.Fprintf(os.Stderr, "Cross-compiled fullsend for linux/%s\n", opts.Arch)
-			return AcquireResult{TmpDir: tmpDir, Path: binaryPath, Source: SourceCheckoutBuild}, nil
-		} else {
-			fmt.Fprintf(os.Stderr, "WARNING: cross-compilation failed: %v\n", ccErr)
-		}
-	} else {
+	fmt.Fprintf(os.Stderr, "Cross-compiling fullsend for linux/%s...\n", arch)
+	ccErr := CrossCompile(CrossCompileOpts{
+		Version:      version,
+		Arch:         arch,
+		DestPath:     binaryPath,
+		VersionStamp: "-vendored",
+		SourceDir:    rootPath,
+	})
+	if ccErr == nil {
+		fmt.Fprintf(os.Stderr, "Cross-compiled fullsend for linux/%s\n", arch)
+		return AcquireResult{TmpDir: tmpDir, Path: binaryPath, Source: SourceCheckoutBuild}, nil
+	}
+	fmt.Fprintf(os.Stderr, "WARNING: cross-compilation failed: %v\n", ccErr)
+	os.RemoveAll(tmpDir)
+	return resolveForVendorWithoutRoot(VendorOpts{Version: version, Arch: arch}, ccErr)
+}
+
+func resolveForVendorWithoutRoot(opts VendorOpts, rootErr error) (AcquireResult, error) {
+	if rootErr != nil {
 		fmt.Fprintf(os.Stderr, "WARNING: could not resolve source root: %v\n", rootErr)
 	}
 
 	if IsReleasedVersion(opts.Version) {
+		tmpDir, err := os.MkdirTemp("", "fullsend-linux-*")
+		if err != nil {
+			return AcquireResult{}, fmt.Errorf("creating temp dir: %w", err)
+		}
+		binaryPath := filepath.Join(tmpDir, "fullsend")
 		fmt.Fprintf(os.Stderr, "Downloading fullsend %s for linux/%s from GitHub Release...\n", opts.Version, opts.Arch)
-		if dlErr := DownloadRelease(opts.Version, opts.Arch, binaryPath); dlErr == nil {
+		dlErr := DownloadRelease(opts.Version, opts.Arch, binaryPath)
+		if dlErr == nil {
 			fmt.Fprintf(os.Stderr, "Downloaded fullsend for linux/%s\n", opts.Arch)
 			return AcquireResult{TmpDir: tmpDir, Path: binaryPath, Source: SourceReleaseDownload}, nil
-		} else {
-			os.RemoveAll(tmpDir)
-			return AcquireResult{}, fmt.Errorf("cross-compilation unavailable and release download failed for v%s: %w", opts.Version, dlErr)
 		}
+		os.RemoveAll(tmpDir)
+		return AcquireResult{}, fmt.Errorf("cross-compilation unavailable and release download failed for v%s: %w", opts.Version, dlErr)
 	}
 
-	os.RemoveAll(tmpDir)
 	return AcquireResult{}, fmt.Errorf("cannot vendor binary: not in fullsend source tree and CLI version %s is a dev build — use --fullsend-binary, --fullsend-source, run from a checkout, or use a released CLI", opts.Version)
 }

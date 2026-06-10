@@ -117,3 +117,29 @@ func RemoveStaleContentCommitMessage(path string) string {
 	}, "\n")
 	return title + "\n\n" + body
 }
+
+// RemoveStaleVendoredAssetsCommitMessage returns title + body for batch stale deletion.
+func RemoveStaleVendoredAssetsCommitMessage(paths []string) string {
+	title := "chore: remove stale vendored fullsend assets"
+	lines := []string{
+		"Reason: --vendor not set; removing stale vendored binary and content",
+		fmt.Sprintf("Paths: %d", len(paths)),
+	}
+	for _, p := range paths {
+		lines = append(lines, fmt.Sprintf("- %s", p))
+	}
+	return title + "\n\n" + strings.Join(lines, "\n")
+}
+
+// DeleteVendoredPaths removes stale vendored paths in a single commit when possible.
+func DeleteVendoredPaths(ctx context.Context, client forge.Client, owner, repo string, paths []string) (int, error) {
+	if len(paths) == 0 {
+		return 0, nil
+	}
+	msg := RemoveStaleVendoredAssetsCommitMessage(paths)
+	deleted, err := client.DeleteFiles(ctx, owner, repo, msg, paths)
+	if err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}

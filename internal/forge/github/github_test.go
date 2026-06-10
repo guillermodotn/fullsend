@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -1414,6 +1415,62 @@ func TestCommitFiles_Empty(t *testing.T) {
 	committed, err := client.CommitFiles(context.Background(), "org", "repo", "msg", nil)
 	require.NoError(t, err)
 	assert.False(t, committed)
+}
+
+func TestDeleteFiles_Empty(t *testing.T) {
+	client := New("token")
+	deleted, err := client.DeleteFiles(context.Background(), "org", "repo", "msg", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, deleted)
+}
+
+func TestDeleteFiles_Atomic(t *testing.T) {
+	var treeCreated bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo":
+			json.NewEncoder(w).Encode(map[string]string{"default_branch": "main"})
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo/git/ref/heads/main":
+			json.NewEncoder(w).Encode(map[string]any{"object": map[string]string{"sha": "commit"}})
+		case r.Method == "GET" && r.URL.Path == "/repos/org/repo/git/commits/commit":
+			json.NewEncoder(w).Encode(map[string]any{"tree": map[string]string{"sha": "tree"}})
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/repos/org/repo/git/trees/tree"):
+			json.NewEncoder(w).Encode(map[string]any{
+				"tree": []map[string]string{
+					{"path": "bin/fullsend", "sha": "abc"},
+					{"path": ".defaults/action.yml", "sha": "def"},
+				},
+				"truncated": false,
+			})
+		case r.Method == "POST" && r.URL.Path == "/repos/org/repo/git/trees":
+			treeCreated = true
+			var body map[string]any
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			entries := body["tree"].([]any)
+			require.Len(t, entries, 2)
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]string{"sha": "newtree"})
+		case r.Method == "POST" && r.URL.Path == "/repos/org/repo/git/commits":
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(map[string]string{"sha": "newcommit"})
+		case r.Method == "PATCH" && r.URL.Path == "/repos/org/repo/git/refs/heads/main":
+			json.NewEncoder(w).Encode(map[string]any{})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	deleted, err := client.DeleteFiles(context.Background(), "org", "repo", "remove stale", []string{
+		"bin/fullsend",
+		".defaults/action.yml",
+		"missing.yml",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, deleted)
+	assert.True(t, treeCreated)
 }
 
 func TestDeleteIssueComment(t *testing.T) {

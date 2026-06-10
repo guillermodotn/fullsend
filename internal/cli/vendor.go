@@ -75,11 +75,7 @@ func acquireAndVendor(ctx context.Context, client forge.Client, printer *ui.Prin
 		source = binary.SourceExplicitPath
 		printer.StepDone("Validated linux/amd64 ELF binary")
 	} else {
-		result, err := binary.ResolveForVendor(binary.VendorOpts{
-			SourceDir: root.Path,
-			Version:   version,
-			Arch:      vendorArch,
-		})
+		result, err := binary.ResolveForVendorFromRoot(root.Path, version, vendorArch)
 		if err != nil {
 			printer.StepFail("Failed to obtain binary for vendoring")
 			return err
@@ -164,35 +160,12 @@ func removeStaleVendoredAssets(ctx context.Context, client forge.Client, printer
 		return fmt.Errorf("resolving vendored cleanup paths: %w", err)
 	}
 
-	var removed int
-	for _, path := range paths {
-		_, err := client.GetFileContent(ctx, owner, repo, path)
-		if err != nil {
-			if forge.IsNotFound(err) {
-				continue
-			}
-			return fmt.Errorf("checking for vendored content at %s: %w", path, err)
-		}
-		if path == destPath {
-			printer.StepStart("removing stale vendored binary")
-		} else {
-			printer.StepStart("removing stale vendored content")
-		}
-		deleteMsg := layers.RemoveStaleContentCommitMessage(path)
-		if path == destPath {
-			deleteMsg = layers.RemoveStaleBinaryCommitMessage(path)
-		}
-		if err := client.DeleteFile(ctx, owner, repo, path, deleteMsg); err != nil {
-			if path == destPath {
-				printer.StepFail("failed to remove vendored binary")
-			} else {
-				printer.StepFail("failed to remove vendored content")
-			}
-			return fmt.Errorf("deleting vendored content at %s: %w", path, err)
-		}
-		removed++
+	printer.StepStart("removing stale vendored content")
+	removed, err := layers.DeleteVendoredPaths(ctx, client, owner, repo, paths)
+	if err != nil {
+		printer.StepFail("failed to remove vendored content")
+		return fmt.Errorf("deleting vendored content: %w", err)
 	}
-
 	if removed > 0 {
 		printer.StepDone(fmt.Sprintf("Removed %d stale vendored files", removed))
 	}

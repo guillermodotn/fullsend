@@ -91,8 +91,8 @@ func TestVendorBinaryLayer_DisabledDeletesBinary(t *testing.T) {
 	assert.Equal(t, "test-org", client.DeletedFiles[0].Owner)
 	assert.Equal(t, ".fullsend", client.DeletedFiles[0].Repo)
 	assert.Equal(t, "bin/fullsend", client.DeletedFiles[0].Path)
-	assert.Contains(t, client.DeletedFiles[0].Message, "\n\n")
-	assert.Contains(t, client.DeletedFiles[0].Message, "Path: bin/fullsend")
+	assert.Contains(t, client.DeletedFiles[0].Message, "remove stale vendored fullsend assets")
+	assert.Contains(t, client.DeletedFiles[0].Message, "bin/fullsend")
 
 	// File should no longer be in FileContents
 	_, ok := client.FileContents["test-org/.fullsend/bin/fullsend"]
@@ -117,14 +117,14 @@ func TestVendorBinaryLayer_DisabledDeleteError(t *testing.T) {
 			"test-org/.fullsend/bin/fullsend": []byte("binary-data"),
 		},
 		Errors: map[string]error{
-			"DeleteFile": errors.New("permission denied"),
+			"DeleteFiles": errors.New("permission denied"),
 		},
 	}
 	layer, _ := newVendorBinaryLayer(t, client, false, nil)
 
 	err := layer.Install(context.Background())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "deleting vendored binary")
+	assert.Contains(t, err.Error(), "deleting vendored content")
 }
 
 func TestVendorBinaryLayer_Uninstall(t *testing.T) {
