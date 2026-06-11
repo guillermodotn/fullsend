@@ -165,10 +165,10 @@ func removeStaleVendoredAssets(ctx context.Context, client forge.Client, printer
 		return fmt.Errorf("resolving vendored cleanup paths: %w", err)
 	}
 
-	printer.StepStart("removing stale vendored content")
+	printer.StepStart("Removing stale vendored content")
 	removed, err := layers.DeleteVendoredPaths(ctx, client, owner, repo, paths)
 	if err != nil {
-		printer.StepFail("failed to remove vendored content")
+		printer.StepFail("Failed to remove vendored content")
 		return fmt.Errorf("deleting vendored content: %w", err)
 	}
 	if removed > 0 {

@@ -14,6 +14,8 @@ import (
 type VendorFunc func(ctx context.Context, client forge.Client, printer *ui.Printer, owner, repo string) error
 
 // VendorBinaryLayer manages vendored binary and content assets.
+// The type name retains "Binary" from when the layer only uploaded the CLI
+// binary; it now vendors the full stack (workflows, actions, agent content).
 //
 // When enabled (--vendor), it calls VendorFunc to upload binary and content.
 // When disabled, it removes stale vendored assets from prior installs.
@@ -93,10 +95,10 @@ func (l *VendorBinaryLayer) Install(ctx context.Context) error {
 		return fmt.Errorf("resolving vendored cleanup paths: %w", err)
 	}
 
-	l.ui.StepStart("removing stale vendored content")
+	l.ui.StepStart("Removing stale vendored content")
 	removed, err := DeleteVendoredPaths(ctx, l.client, l.org, l.repo, paths)
 	if err != nil {
-		l.ui.StepFail("failed to remove vendored content")
+		l.ui.StepFail("Failed to remove vendored content")
 		return fmt.Errorf("deleting vendored content: %w", err)
 	}
 	if removed > 0 {
@@ -105,8 +107,12 @@ func (l *VendorBinaryLayer) Install(ctx context.Context) error {
 	return nil
 }
 
+// Uninstall is a no-op. Vendored assets are removed when the config repo is
+// deleted by ConfigRepoLayer, or when install runs without --vendor.
 func (l *VendorBinaryLayer) Uninstall(_ context.Context) error { return nil }
 
+// Analyze reports vendored asset presence, manifest alignment, and optional
+// source-tree alignment (via SetAnalyzeOptions).
 func (l *VendorBinaryLayer) Analyze(ctx context.Context) (*LayerReport, error) {
 	report := &LayerReport{Name: l.Name()}
 
