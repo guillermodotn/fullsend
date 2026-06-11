@@ -532,7 +532,7 @@ Inference authentication:
 				if err := ensureConfigRepoExists(ctx, client, printer, org); err != nil {
 					return err
 				}
-				creds, err := runAppSetup(ctx, client, printer, org, roles, mintProject, publicApps, sharedSlugs, appSet, perOrgStoredIDs)
+				creds, err := runAppSetup(ctx, client, printer, org, roles, mintProject, mintURL, publicApps, sharedSlugs, appSet, perOrgStoredIDs)
 				if err != nil {
 					return err
 				}
@@ -893,7 +893,7 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 			}
 		}
 
-		creds, credErr := runAppSetup(ctx, client, printer, owner, roles, mintProject, publicApps, sharedSlugs, c.AppSet, existingIDs)
+		creds, credErr := runAppSetup(ctx, client, printer, owner, roles, mintProject, mintURL, publicApps, sharedSlugs, c.AppSet, existingIDs)
 		if credErr != nil {
 			return credErr
 		}
@@ -1310,8 +1310,11 @@ func detectSharedApps(ctx context.Context, client forge.Client, printer *ui.Prin
 
 // runAppSetup creates or reuses GitHub Apps for each role. When mintProject is
 // non-empty, PEMs are also stored in GCP Secret Manager during app creation so
-// they survive partial provisioning failures.
-func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, org string, roles []string, mintProject string, publicApps bool, sharedSlugs map[string]string, appSet string, storedAppIDs map[string]string) ([]layers.AgentCredentials, error) {
+// they survive partial provisioning failures. When mintURL is non-empty but
+// mintProject is empty (e.g. the "github setup" flow), PEMs are managed by a
+// remote mint — the secret-existence check is skipped and existing apps are
+// reused silently.
+func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, org string, roles []string, mintProject string, mintURL string, publicApps bool, sharedSlugs map[string]string, appSet string, storedAppIDs map[string]string) ([]layers.AgentCredentials, error) {
 	printer.Header("Setting up GitHub Apps")
 	printer.Blank()
 
@@ -1343,26 +1346,31 @@ func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, 
 		}, gcf.NewLiveGCFClient(mintProject))
 	}
 
-	// In OIDC mint mode, PEMs live in Secret Manager — check there.
+	// In OIDC mint mode with direct GCP access, PEMs live in Secret
+	// Manager — check there.  When only a mint URL is available (no local
+	// GCP project), the remote mint manages PEMs and we cannot verify
+	// their existence — skip the check so handleExistingApp assumes reuse.
 	// Otherwise, check GitHub repo secrets.
 	if pemProvisioner != nil {
 		setup = setup.WithSecretExists(func(role string) (bool, error) {
 			return pemProvisioner.SecretExists(ctx, role)
 		})
-	} else {
+	} else if mintURL == "" {
 		setup = setup.WithSecretExists(func(role string) (bool, error) {
 			secretName := fmt.Sprintf("FULLSEND_%s_APP_PRIVATE_KEY", strings.ToUpper(role))
 			return client.RepoSecretExists(ctx, org, forge.ConfigRepoName, secretName)
 		})
 	}
 
-	// In OIDC mint mode, store PEMs only in Secret Manager.
+	// In OIDC mint mode with direct GCP access, store PEMs only in Secret
+	// Manager.  When only a mint URL is available, PEM storage is handled
+	// by the remote mint — skip local storage.
 	// Otherwise, store in GitHub repo secrets.
 	if pemProvisioner != nil {
 		setup = setup.WithStoreSecret(func(sctx context.Context, role, pem string) error {
 			return pemProvisioner.StoreAgentPEM(sctx, role, []byte(pem))
 		})
-	} else {
+	} else if mintURL == "" {
 		setup = setup.WithStoreSecret(func(sctx context.Context, role, pem string) error {
 			secretName := fmt.Sprintf("FULLSEND_%s_APP_PRIVATE_KEY", strings.ToUpper(role))
 			return client.CreateRepoSecret(sctx, org, forge.ConfigRepoName, secretName, pem)
