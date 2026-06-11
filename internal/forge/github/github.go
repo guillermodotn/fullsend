@@ -806,6 +806,7 @@ func (c *LiveClient) DeleteFiles(ctx context.Context, owner, repo, message strin
 	var existingTree struct {
 		Tree []struct {
 			Path string `json:"path"`
+			Mode string `json:"mode"`
 		} `json:"tree"`
 		Truncated bool `json:"truncated"`
 	}
@@ -816,18 +817,24 @@ func (c *LiveClient) DeleteFiles(ctx context.Context, owner, repo, message strin
 		return 0, fmt.Errorf("tree too large (truncated); cannot delete")
 	}
 
-	existing := make(map[string]struct{}, len(existingTree.Tree))
+	existing := make(map[string]string, len(existingTree.Tree))
 	for _, entry := range existingTree.Tree {
-		existing[entry.Path] = struct{}{}
+		existing[entry.Path] = entry.Mode
 	}
 
 	var deleteEntries []map[string]any
 	for _, path := range paths {
-		if _, ok := existing[path]; !ok {
+		mode, ok := existing[path]
+		if !ok {
 			continue
+		}
+		if mode == "" {
+			mode = "100644"
 		}
 		deleteEntries = append(deleteEntries, map[string]any{
 			"path": path,
+			"mode": mode,
+			"type": "blob",
 			"sha":  nil,
 		})
 	}
