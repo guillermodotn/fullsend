@@ -29,6 +29,12 @@ func TestVendorManifestRoundTrip(t *testing.T) {
 	assert.Equal(t, m.Paths, parsed.Paths)
 }
 
+func TestParseVendorManifestRejectsUnknownVersion(t *testing.T) {
+	_, err := ParseVendorManifest([]byte("version: \"2\"\nbinary_path: bin/fullsend\npaths: []\n"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported vendor manifest version")
+}
+
 func TestVendorManifestCleanupPaths(t *testing.T) {
 	m := NewVendorManifest("dev", "", "bin/fullsend", []string{".defaults/action.yml"})
 	paths := m.CleanupPaths("")

@@ -65,9 +65,15 @@ func TestAcquireAndVendor_ExplicitPath(t *testing.T) {
 
 	key := "org/my-repo/" + layers.VendoredBinaryPathPerRepo
 	require.Contains(t, client.FileContents, key)
-	require.NotEmpty(t, client.CreatedFiles)
-	assert.Contains(t, client.CreatedFiles[0].Message, "\n\n")
-	assert.Contains(t, client.CreatedFiles[0].Message, "Source: --fullsend-binary")
+	require.Len(t, client.CommittedFiles, 1)
+	commit := client.CommittedFiles[0]
+	assert.Contains(t, commit.Message, "\n\n")
+	assert.Contains(t, commit.Message, "Source: --vendor install")
+	var paths []string
+	for _, f := range commit.Files {
+		paths = append(paths, f.Path)
+	}
+	assert.Contains(t, paths, layers.VendoredBinaryPathPerRepo)
 }
 
 func TestAcquireAndVendor_CheckoutBuild(t *testing.T) {
@@ -84,6 +90,7 @@ func TestAcquireAndVendor_CheckoutBuild(t *testing.T) {
 
 	key := "org/" + forge.ConfigRepoName + "/" + layers.VendoredBinaryPath
 	require.Contains(t, client.FileContents, key)
-	require.NotEmpty(t, client.CreatedFiles)
-	assert.Contains(t, client.CreatedFiles[0].Message, "cross-compiled from checkout")
+	require.Len(t, client.CommittedFiles, 1)
+	assert.Contains(t, client.CommittedFiles[0].Message, "\n\n")
+	assert.Contains(t, client.CommittedFiles[0].Message, "Source: --vendor install")
 }

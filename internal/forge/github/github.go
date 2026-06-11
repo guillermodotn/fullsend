@@ -867,11 +867,16 @@ func (c *LiveClient) DeleteFiles(ctx context.Context, owner, repo, message strin
 	}
 
 	refPayload := map[string]string{"sha": newCommit.SHA}
-	refUpdateResp, err := c.patch(ctx, fmt.Sprintf("/repos/%s/%s/git/refs/heads/%s", owner, repo, repoInfo.DefaultBranch), refPayload)
-	if err != nil {
-		return 0, fmt.Errorf("update ref: %w", err)
+	if err := c.retryOnTransient(ctx, "update ref", func() error {
+		refUpdateResp, patchErr := c.patch(ctx, fmt.Sprintf("/repos/%s/%s/git/refs/heads/%s", owner, repo, repoInfo.DefaultBranch), refPayload)
+		if patchErr != nil {
+			return fmt.Errorf("update ref: %w", patchErr)
+		}
+		refUpdateResp.Body.Close()
+		return nil
+	}); err != nil {
+		return 0, err
 	}
-	refUpdateResp.Body.Close()
 
 	return len(deleteEntries), nil
 }

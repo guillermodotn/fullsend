@@ -66,7 +66,6 @@ func acquireAndVendor(ctx context.Context, client forge.Client, printer *ui.Prin
 
 	var (
 		binPath string
-		source  binary.Source
 		tmpDir  string
 	)
 
@@ -77,7 +76,6 @@ func acquireAndVendor(ctx context.Context, client forge.Client, printer *ui.Prin
 			return fmt.Errorf("validating --fullsend-binary: %w", err)
 		}
 		binPath = fullsendBinary
-		source = binary.SourceExplicitPath
 		printer.StepDone("Validated linux/amd64 ELF binary")
 	} else {
 		result, err := binary.ResolveForVendorFromRoot(root.Path, version, vendorArch)
@@ -87,7 +85,6 @@ func acquireAndVendor(ctx context.Context, client forge.Client, printer *ui.Prin
 		}
 		tmpDir = result.TmpDir
 		binPath = result.Path
-		source = result.Source
 	}
 
 	if tmpDir != "" {
@@ -98,14 +95,14 @@ func acquireAndVendor(ctx context.Context, client forge.Client, printer *ui.Prin
 	if err != nil {
 		return fmt.Errorf("stat binary: %w", err)
 	}
-
-	printer.StepStart(fmt.Sprintf("Uploading vendored binary to %s", destPath))
-	binMsg := layers.VendorCommitMessage(source, version, destPath, info.Size())
-	if err := layers.VendorBinary(ctx, client, owner, repo, destPath, binPath, binMsg); err != nil {
-		printer.StepFail("Failed to upload vendored binary")
-		return err
+	const maxVendoredBinarySize = 100 * 1024 * 1024
+	if info.Size() > maxVendoredBinarySize {
+		return fmt.Errorf("binary is %d bytes, exceeds %d byte limit", info.Size(), maxVendoredBinarySize)
 	}
-	printer.StepDone(fmt.Sprintf("Uploaded vendored binary (%d MB)", info.Size()/(1024*1024)))
+	binData, err := os.ReadFile(binPath)
+	if err != nil {
+		return fmt.Errorf("reading binary: %w", err)
+	}
 
 	assets, err := scaffold.CollectVendoredAssets(root.Path, pathPrefix)
 	if err != nil {
@@ -119,7 +116,11 @@ func acquireAndVendor(ctx context.Context, client forge.Client, printer *ui.Prin
 		return fmt.Errorf("building vendor manifest: %w", err)
 	}
 
-	var files []forge.TreeFile
+	files := []forge.TreeFile{{
+		Path:    destPath,
+		Content: binData,
+		Mode:    "100755",
+	}}
 	for _, f := range assets {
 		files = append(files, forge.TreeFile{
 			Path:    f.Path,
@@ -133,7 +134,7 @@ func acquireAndVendor(ctx context.Context, client forge.Client, printer *ui.Prin
 		Mode:    "100644",
 	})
 
-	printer.StepStart(fmt.Sprintf("Uploading %d vendored content files", len(assets)))
+	printer.StepStart(fmt.Sprintf("Uploading vendored binary and %d content files", len(assets)+1))
 	contentMsg := layers.VendorContentCommitMessage(version, pathPrefix, len(files))
 	committed, err := client.CommitFiles(ctx, owner, repo, contentMsg, files)
 	if err != nil {
@@ -141,7 +142,7 @@ func acquireAndVendor(ctx context.Context, client forge.Client, printer *ui.Prin
 		return fmt.Errorf("committing vendored content: %w", err)
 	}
 	if committed {
-		printer.StepDone(fmt.Sprintf("Uploaded %d vendored content files", len(files)))
+		printer.StepDone(fmt.Sprintf("Uploaded vendored binary and %d content files", len(assets)))
 	} else {
 		printer.StepDone("Vendored content up to date")
 	}

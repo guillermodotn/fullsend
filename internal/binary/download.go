@@ -213,7 +213,7 @@ func extractSourceTree(r io.Reader, destDir string) error {
 		if !strings.HasPrefix(clean+"/", rootPrefix) {
 			continue
 		}
-		rel := strings.TrimPrefix(clean, strings.TrimSuffix(rootPrefix, "/"))
+		rel := strings.TrimPrefix(clean, rootPrefix)
 		if rel == "" || rel == "." {
 			continue
 		}

@@ -52,8 +52,8 @@ func ParseVendorManifest(data []byte) (*VendorManifest, error) {
 	if err := yaml.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("parsing vendor manifest: %w", err)
 	}
-	if m.Version == "" {
-		return nil, fmt.Errorf("vendor manifest missing version")
+	if m.Version != vendorManifestVersion {
+		return nil, fmt.Errorf("unsupported vendor manifest version %q", m.Version)
 	}
 	if m.BinaryPath == "" {
 		return nil, fmt.Errorf("vendor manifest missing binary_path")
