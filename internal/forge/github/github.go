@@ -599,6 +599,8 @@ func isTransientStatus(code int) bool {
 // CommitFiles atomically commits multiple files to the default branch
 // using the Git Trees/Blobs/Commits API. Returns (false, nil) when
 // all files already match the current tree (idempotent).
+// Tree entries use base64 encoding so binary content (e.g. vendored ELF)
+// is not corrupted by JSON UTF-8 replacement.
 func (c *LiveClient) CommitFiles(ctx context.Context, owner, repo, message string, files []forge.TreeFile) (bool, error) {
 	if len(files) == 0 {
 		return false, nil
