@@ -65,7 +65,7 @@ If a cross-repo search fails or returns an error (e.g., due to access restrictio
 
 ### 2c. Check existing prerequisites
 
-If the issue already has a `prerequisites` label, check whether the previously identified blocker (linked in prior triage comments) is still open. Fetch the full context of the blocking issue or PR to understand its current state:
+If the issue already has a `blocked` label, check whether the previously identified blocker (linked in prior triage comments) is still open. Fetch the full context of the blocking issue or PR to understand its current state:
 
 ```
 # For blocking issues:

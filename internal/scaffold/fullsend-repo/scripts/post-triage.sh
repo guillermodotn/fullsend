@@ -141,8 +141,6 @@ case "${ACTION}" in
     fi
 
     # The source repo is always implicitly allowed.
-    SOURCE_ORG="${REPO%%/*}"
-
     is_target_allowed() {
       local target_repo="$1"
       local target_org="${target_repo%%/*}"
