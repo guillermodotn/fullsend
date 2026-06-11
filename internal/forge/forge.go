@@ -52,6 +52,14 @@ type WorkflowRun struct {
 	CreatedAt  string
 }
 
+// Workflow represents a workflow definition registered with the forge.
+type Workflow struct {
+	ID    int
+	Name  string
+	Path  string
+	State string // "active", "disabled", etc.
+}
+
 // Annotation represents a check-run annotation (e.g. from ::notice:: or
 // ::warning:: workflow commands).
 type Annotation struct {
@@ -240,6 +248,7 @@ type Client interface {
 	GetOrgVariableRepos(ctx context.Context, org, name string) ([]int64, error)
 
 	// CI/Workflow operations
+	GetWorkflow(ctx context.Context, owner, repo, workflowFile string) (*Workflow, error)
 	GetLatestWorkflowRun(ctx context.Context, owner, repo, workflowFile string) (*WorkflowRun, error)
 	GetWorkflowRun(ctx context.Context, owner, repo string, runID int) (*WorkflowRun, error)
 	DispatchWorkflow(ctx context.Context, owner, repo, workflowFile, ref string, inputs map[string]string) error

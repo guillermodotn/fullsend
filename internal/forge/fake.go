@@ -105,6 +105,7 @@ type FakeClient struct {
 	Repos             []Repository
 	FileContents      map[string][]byte       // key: "owner/repo/path"
 	WorkflowRuns      map[string]*WorkflowRun // key: "owner/repo/workflow"
+	Workflows         map[string]*Workflow      // key: "owner/repo/workflow"
 	AuthenticatedUser string
 	OrgPlan           string // plan name returned by GetOrgPlan (default: "free")
 	Installations     []Installation
@@ -679,6 +680,28 @@ func (f *FakeClient) GetRepoVariable(_ context.Context, owner, repo, name string
 		}
 	}
 	return "", false, nil
+}
+
+func (f *FakeClient) GetWorkflow(_ context.Context, owner, repo, workflowFile string) (*Workflow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if e := f.err("GetWorkflow"); e != nil {
+		return nil, e
+	}
+
+	key := owner + "/" + repo + "/" + workflowFile
+	if f.Workflows != nil {
+		if wf, ok := f.Workflows[key]; ok {
+			return wf, nil
+		}
+	}
+
+	return &Workflow{
+		Name:  workflowFile,
+		Path:  ".github/workflows/" + workflowFile,
+		State: "active",
+	}, nil
 }
 
 func (f *FakeClient) GetLatestWorkflowRun(_ context.Context, owner, repo, workflowFile string) (*WorkflowRun, error) {

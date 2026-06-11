@@ -16,7 +16,10 @@ const (
 	// repoMaintenanceWorkflow is the workflow file that handles enrollment.
 	repoMaintenanceWorkflow = "repo-maintenance.yml"
 
-	workflowDispatchRetryAttempts = 12
+	workflowRegistrationMaxWait = 5 * time.Minute
+	workflowRegistrationPoll    = 5 * time.Second
+
+	workflowDispatchRetryAttempts = 24
 	workflowDispatchRetryInitial  = 3 * time.Second
 	workflowDispatchRetryMax      = 15 * time.Second
 )
@@ -77,14 +80,25 @@ func (l *EnrollmentLayer) Install(ctx context.Context) error {
 	dispatchTime := time.Now().UTC().Add(-30 * time.Second)
 
 	l.ui.StepStart("dispatching repo-maintenance workflow for enrollment")
-	if err := l.dispatchRepoMaintenanceWithRetry(ctx); err != nil {
-		return fmt.Errorf("dispatching repo-maintenance: %w", err)
+	if err := l.awaitWorkflowRegistration(ctx); err != nil {
+		return fmt.Errorf("waiting for repo-maintenance workflow: %w", err)
 	}
-	l.ui.StepDone("dispatched repo-maintenance workflow")
+	dispatchErr := l.dispatchRepoMaintenanceWithRetry(ctx)
+	if dispatchErr != nil {
+		if !isWorkflowDispatchNotReady(dispatchErr) {
+			return fmt.Errorf("dispatching repo-maintenance: %w", dispatchErr)
+		}
+		l.ui.StepWarn(fmt.Sprintf("workflow dispatch failed (%v); waiting for push-triggered run", dispatchErr))
+	} else {
+		l.ui.StepDone("dispatched repo-maintenance workflow")
+	}
 
 	// Wait for the workflow run to complete.
 	run, err := l.awaitWorkflowRun(ctx, dispatchTime)
 	if err != nil {
+		if dispatchErr != nil {
+			return fmt.Errorf("dispatching repo-maintenance: %w", dispatchErr)
+		}
 		l.ui.StepWarn(fmt.Sprintf("could not confirm enrollment: %v", err))
 		l.ui.StepInfo("check the repo-maintenance workflow in .fullsend for results")
 		return nil // non-fatal — enrollment may still succeed
@@ -132,6 +146,40 @@ func (l *EnrollmentLayer) dispatchRepoMaintenanceWithRetry(ctx context.Context) 
 	}
 
 	return lastErr
+}
+
+func (l *EnrollmentLayer) awaitWorkflowRegistration(ctx context.Context) error {
+	deadline := time.Now().Add(workflowRegistrationMaxWait)
+	attempt := 0
+
+	for {
+		attempt++
+		wf, err := l.client.GetWorkflow(ctx, l.org, forge.ConfigRepoName, repoMaintenanceWorkflow)
+		if err == nil && wf.State == "active" {
+			if attempt > 1 {
+				l.ui.StepInfo(fmt.Sprintf("repo-maintenance workflow registered (state: active, attempt %d)", attempt))
+			}
+			return nil
+		}
+		if err != nil && !forge.IsNotFound(err) {
+			return fmt.Errorf("checking repo-maintenance workflow registration: %w", err)
+		}
+
+		if time.Now().After(deadline) {
+			state := "not found"
+			if wf != nil {
+				state = wf.State
+			}
+			return fmt.Errorf("repo-maintenance workflow not ready after %s (last state: %s)", workflowRegistrationMaxWait, state)
+		}
+
+		l.ui.StepInfo(fmt.Sprintf("waiting for repo-maintenance workflow registration (attempt %d)...", attempt))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(workflowRegistrationPoll):
+		}
+	}
 }
 
 func isWorkflowDispatchNotReady(err error) bool {

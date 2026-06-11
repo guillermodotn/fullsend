@@ -415,3 +415,44 @@ func TestEnrollmentLayer_Analyze_PerRepoGuardCheckError(t *testing.T) {
 	assert.Contains(t, report.Details[0], "all 1 repos failed guard check")
 	assert.Contains(t, report.Details[1], "guard check failed, skipped")
 }
+
+func TestEnrollmentLayer_Install_WorkflowRegistrationWait(t *testing.T) {
+	now := time.Now().UTC()
+	client := &registrationWaitClient{
+		FakeClient: forge.FakeClient{
+			WorkflowRuns: map[string]*forge.WorkflowRun{
+				"test-org/.fullsend/repo-maintenance.yml": {
+					ID:         1,
+					Status:     "completed",
+					Conclusion: "success",
+					CreatedAt:  now.Add(time.Minute).Format(time.RFC3339),
+				},
+			},
+		},
+		activeAfter: 2,
+	}
+	layer, buf := newEnrollmentLayer(t, client, []string{"repo-a"}, nil)
+
+	err := layer.Install(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 2, client.getAttempts)
+	assert.Contains(t, buf.String(), "waiting for repo-maintenance workflow registration")
+}
+
+type registrationWaitClient struct {
+	forge.FakeClient
+	activeAfter int
+	getAttempts int
+}
+
+func (c *registrationWaitClient) GetWorkflow(_ context.Context, _, _, _ string) (*forge.Workflow, error) {
+	c.getAttempts++
+	if c.getAttempts < c.activeAfter {
+		return nil, forge.ErrNotFound
+	}
+	return &forge.Workflow{
+		Name:  repoMaintenanceWorkflow,
+		Path:  ".github/workflows/" + repoMaintenanceWorkflow,
+		State: "active",
+	}, nil
+}

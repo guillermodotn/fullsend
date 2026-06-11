@@ -1413,6 +1413,31 @@ func (c *LiveClient) GetRepoVariable(ctx context.Context, owner, repo, name stri
 	return result.Value, true, nil
 }
 
+// GetWorkflow returns a workflow definition by filename (e.g. repo-maintenance.yml).
+func (c *LiveClient) GetWorkflow(ctx context.Context, owner, repo, workflowFile string) (*forge.Workflow, error) {
+	resp, err := c.get(ctx, fmt.Sprintf("/repos/%s/%s/actions/workflows/%s", owner, repo, workflowFile))
+	if err != nil {
+		return nil, fmt.Errorf("get workflow %s: %w", workflowFile, err)
+	}
+
+	var wf struct {
+		ID    int    `json:"id"`
+		Name  string `json:"name"`
+		Path  string `json:"path"`
+		State string `json:"state"`
+	}
+	if err := decodeJSON(resp, &wf); err != nil {
+		return nil, fmt.Errorf("decode workflow %s: %w", workflowFile, err)
+	}
+
+	return &forge.Workflow{
+		ID:    wf.ID,
+		Name:  wf.Name,
+		Path:  wf.Path,
+		State: wf.State,
+	}, nil
+}
+
 // GetLatestWorkflowRun returns the most recent workflow run for a workflow file.
 func (c *LiveClient) GetLatestWorkflowRun(ctx context.Context, owner, repo, workflowFile string) (*forge.WorkflowRun, error) {
 	resp, err := c.get(ctx, fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/runs?per_page=1", owner, repo, workflowFile))

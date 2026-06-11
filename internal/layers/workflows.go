@@ -116,6 +116,27 @@ func (l *WorkflowsLayer) Install(ctx context.Context) error {
 		l.ui.StepDone("Scaffold up to date")
 	}
 
+	if committed {
+		if err := l.activateRepoMaintenance(ctx); err != nil {
+			l.ui.StepWarn(fmt.Sprintf("could not activate repo-maintenance workflow: %v", err))
+		}
+	}
+
+	return nil
+}
+
+func (l *WorkflowsLayer) activateRepoMaintenance(ctx context.Context) error {
+	content, err := l.client.GetFileContent(ctx, l.org, forge.ConfigRepoName, configFilePath)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", configFilePath, err)
+	}
+
+	l.ui.StepStart("Activating repo-maintenance workflow")
+	if err := l.client.CreateOrUpdateFile(ctx, l.org, forge.ConfigRepoName, configFilePath, "chore: activate fullsend workflows", content); err != nil {
+		l.ui.StepFail("Failed to activate repo-maintenance workflow")
+		return fmt.Errorf("writing %s: %w", configFilePath, err)
+	}
+	l.ui.StepDone("Activated repo-maintenance workflow")
 	return nil
 }
 

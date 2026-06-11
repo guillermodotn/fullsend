@@ -489,6 +489,29 @@ func TestCreateOrUpdateRepoVariable_FallbackToPost(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestGetWorkflow(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "GET", r.Method)
+		assert.Equal(t, "/repos/owner/repo/actions/workflows/repo-maintenance.yml", r.URL.Path)
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":    42,
+			"name":  "Repo Maintenance",
+			"path":  ".github/workflows/repo-maintenance.yml",
+			"state": "active",
+		})
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	wf, err := client.GetWorkflow(context.Background(), "owner", "repo", "repo-maintenance.yml")
+	require.NoError(t, err)
+	assert.Equal(t, 42, wf.ID)
+	assert.Equal(t, "Repo Maintenance", wf.Name)
+	assert.Equal(t, ".github/workflows/repo-maintenance.yml", wf.Path)
+	assert.Equal(t, "active", wf.State)
+}
+
 func TestGetLatestWorkflowRun(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "GET", r.Method)

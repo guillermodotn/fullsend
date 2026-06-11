@@ -52,6 +52,22 @@ func TestWorkflowsLayer_Install_WritesAllFiles(t *testing.T) {
 	assert.Contains(t, paths, ".github/workflows/repo-maintenance.yml")
 	assert.Contains(t, paths, "CODEOWNERS")
 	assert.Contains(t, paths["CODEOWNERS"], "admin-user")
+
+	require.Len(t, client.CreatedFiles, 0, "config activation requires config.yaml in repo")
+}
+
+func TestWorkflowsLayer_Install_ActivatesRepoMaintenance(t *testing.T) {
+	client := forge.NewFakeClient()
+	client.FileContents["test-org/.fullsend/config.yaml"] = []byte("repos: {}\n")
+	layer, buf := newWorkflowsLayer(t, client, false)
+
+	err := layer.Install(context.Background())
+	require.NoError(t, err)
+
+	require.Len(t, client.CreatedFiles, 1)
+	assert.Equal(t, "config.yaml", client.CreatedFiles[0].Path)
+	assert.Equal(t, "chore: activate fullsend workflows", client.CreatedFiles[0].Message)
+	assert.Contains(t, buf.String(), "Activated repo-maintenance workflow")
 }
 
 func TestWorkflowsLayer_Install_TriageWorkflowContent(t *testing.T) {
