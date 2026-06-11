@@ -4,9 +4,8 @@
 # Authorized when the PR author is OWNER/MEMBER/COLLABORATOR, or when a fresh
 # ok-to-test label was applied after the latest push.
 #
-# Push time for ok-to-test freshness uses PR updated_at from the workflow event
-# (server-side; passed as PR_UPDATED_AT). On ok-to-test labeled events, the
-# label is treated as fresh (maintainer just applied it). Does not use
+# Freshness uses PR updated_at from the frozen workflow event (PR_UPDATED_AT).
+# On ok-to-test labeled events, authorization is immediate. Does not use
 # committer.date (author-controlled).
 #
 # Usage: check-e2e-authorization.sh PR_NUMBER OWNER/REPO
@@ -70,6 +69,8 @@ elif [[ "${has_ok_label}" == "true" ]]; then
 
   last_push_at="${PR_UPDATED_AT:-}"
   if [[ -z "${last_push_at}" ]]; then
+    # Fallback: live updated_at is noisy (bumped by comments, labels, etc.)
+    # and may over-reject. Prefer the frozen event-payload value (PR_UPDATED_AT).
     last_push_at="$(jq -r '.updated_at // empty' <<<"${pr_json}")"
   fi
 
