@@ -250,7 +250,7 @@ runs:
       shell: bash
       run: |
         sudo apt-get update
-        sudo apt-get install -y podman
+        sudo apt-get install -y podman skopeo
         podman --version
 
     - name: Configure rootless Podman
@@ -301,10 +301,25 @@ runs:
       run: |
         IMAGE="${FULLSEND_SANDBOX_IMAGE:-ghcr.io/fullsend-ai/fullsend-code:latest}"
         echo "Pre-pulling sandbox image: ${IMAGE}"
-        DIGEST_BEFORE="$(podman image inspect --format '{{.Digest}}' -- "${IMAGE}" 2>/dev/null || true)"
+
+        LOCAL_DIGEST="$(podman image inspect --format '{{.Digest}}' -- "${IMAGE}" 2>/dev/null || true)"
+
+        if [[ -n "${LOCAL_DIGEST}" ]]; then
+          # Check remote digest without pulling (~1s HEAD request).
+          REMOTE_DIGEST="$(skopeo inspect --no-tags --format '{{.Digest}}' "docker://${IMAGE}" 2>/dev/null || true)"
+          if [[ -z "${REMOTE_DIGEST}" ]]; then
+            echo "Could not fetch remote digest; falling through to pull"
+          elif [[ "${LOCAL_DIGEST}" == "${REMOTE_DIGEST}" ]]; then
+            echo "Local image is current (digest ${LOCAL_DIGEST:0:19}…); skipping pull"
+            exit 0
+          else
+            echo "Digest mismatch (local=${LOCAL_DIGEST:0:19}… remote=${REMOTE_DIGEST:0:19}…); pulling"
+          fi
+        fi
+
         timeout 300 podman pull -- "${IMAGE}" || echo "::warning::Image pre-pull failed; sandbox create will pull on demand"
-        DIGEST_AFTER="$(podman image inspect --format '{{.Digest}}' -- "${IMAGE}" 2>/dev/null || true)"
-        if [ "${DIGEST_BEFORE}" != "${DIGEST_AFTER}" ]; then
+        PULLED_DIGEST="$(podman image inspect --format '{{.Digest}}' -- "${IMAGE}" 2>/dev/null || true)"
+        if [[ "${LOCAL_DIGEST}" != "${PULLED_DIGEST}" ]]; then
           echo "changed=true" >> "${GITHUB_OUTPUT}"
         fi
 
