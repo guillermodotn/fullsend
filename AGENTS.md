@@ -12,7 +12,7 @@ Fullsend is a platform for fully autonomous agentic development for GitHub-hoste
 - The target audience for problem documents is any contributor community considering autonomous agents — keep language accessible and avoid presuming solutions.
 - Always run `make lint` before submitting changes and fix any failures.
 - You **must** read and follow [COMMITS.md](COMMITS.md) when writing or reviewing commit messages. Getting the prefix right is not optional — GoReleaser uses it to build release notes.
-- This repository requires a [Developer Certificate of Origin (DCO)](https://developercertificate.org/). Every commit **must** be signed off: use `git commit -s` (or add `Signed-off-by: Your Name <email>` as a trailer). Commits without a sign-off will fail CI.
+- This repository requires a [Developer Certificate of Origin (DCO)](https://developercertificate.org/). Human-proposed commits **must** be signed off: use `git commit -s` (or add `Signed-off-by: Your Name <email>` as a trailer). Human-driven agent sessions (e.g., using Claude Code locally) should also sign off — the human directing the session is the one certifying the DCO. **Autonomous agent commits are exempt** and must never supply the DCO with `-s` or with `Signed-off-by`. These agents commit using the GitHub App's bot identity, which the [Probot DCO app](https://github.com/apps/dco) auto-skips.
 - Never commit secrets (tokens, API keys, PEM keys, gcloud credentials) or sensitive data (GCP project names, service account identifiers, Model Armor template names, internal hostnames). Use environment variables with no defaults for sensitive values.
 
 ## Go code
@@ -22,6 +22,8 @@ Fullsend is a platform for fully autonomous agentic development for GitHub-hoste
 - `internal/dispatch/gcf/mintsrc/main.go.embed` — the embedded copy deployed as a GCP Cloud Function
 
 When changing `internal/mint/main.go`, always copy it to `internal/dispatch/gcf/mintsrc/main.go.embed`. If `go.mod` or `go.sum` changed, sync those to `go.mod.embed` and `go.sum.embed` too.
+
+**Mint client:** `internal/mintclient/` is the Go client for calling the mint service at runtime. It exchanges a GitHub Actions OIDC JWT for a role-scoped installation token. Unlike `internal/mint/` and `internal/mintcore/`, it has no embedded copies or sync requirements.
 
 The `internal/mintcore/` module is shared between the mint and devmint. Its files are also embedded for Cloud Function deployment at `internal/dispatch/gcf/mintsrc/mintcore/*.embed`. When changing any file in `internal/mintcore/`, sync it to the corresponding `.embed` file under `mintsrc/mintcore/`. Note: the mint's `go.mod.embed` uses `replace mintcore => ./mintcore` (not `../mintcore`), because `provisioner.go` rewrites the replace directive at bundle time to match the deployed directory layout.
 

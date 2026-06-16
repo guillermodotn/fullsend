@@ -59,10 +59,10 @@ type githubSetupConfig struct {
 	appSet               string
 	enrollAll            bool
 	enrollNone           bool
-	vendor           bool
-	fullsendBinary   string
-	fullsendSource   string
-	dryRun           bool
+	vendor               bool
+	fullsendBinary       string
+	fullsendSource       string
+	dryRun               bool
 }
 
 func newGitHubSetupCmd() *cobra.Command {
@@ -450,7 +450,7 @@ func runGitHubSetupPerOrg(ctx context.Context, client forge.Client, printer *ui.
 		vendorFn, vendorCollect = vendorStackArgs(true, cfg.fullsendBinary, cfg.fullsendSource)
 	}
 
-	stack := buildLayerStack(org, client, orgCfg, printer, user, privateRepo, enabledRepos, agentCreds, enrolledRepoIDs, inferenceProvider, cfg.vendor, vendorFn, vendorCollect, "", dispatcher)
+	stack := buildLayerStack(org, client, orgCfg, printer, user, privateRepo, enabledRepos, agentCreds, enrolledRepoIDs, inferenceProvider, cfg.vendor, vendorFn, vendorCollect, "", dispatcher, commitSHA)
 
 	if cfg.dryRun {
 		printer.Header("Dry run — analyzing what setup would do")
@@ -472,7 +472,7 @@ func runGitHubSetupPerOrg(ctx context.Context, client forge.Client, printer *ui.
 			return err
 		}
 
-		creds, credErr := runAppSetup(ctx, client, printer, org, roles, "", cfg.publicApps, nil, cfg.appSet, nil)
+		creds, credErr := runAppSetup(ctx, client, printer, org, roles, "", cfg.mintURL, cfg.publicApps, nil, cfg.appSet, nil)
 		if credErr != nil {
 			return credErr
 		}
@@ -486,7 +486,7 @@ func runGitHubSetupPerOrg(ctx context.Context, client forge.Client, printer *ui.
 		orgCfg = config.NewOrgConfig(repoNames, enabledRepos, roles, agents, inferenceProviderName)
 		orgCfg.Dispatch.Mode = "oidc-mint"
 
-		stack = buildLayerStack(org, client, orgCfg, printer, user, privateRepo, enabledRepos, agentCreds, enrolledRepoIDs, inferenceProvider, cfg.vendor, vendorFn, vendorCollect, "", dispatcher)
+		stack = buildLayerStack(org, client, orgCfg, printer, user, privateRepo, enabledRepos, agentCreds, enrolledRepoIDs, inferenceProvider, cfg.vendor, vendorFn, vendorCollect, "", dispatcher, commitSHA)
 	}
 
 	if err := runPreflight(ctx, stack, layers.OpInstall, client, printer); err != nil {

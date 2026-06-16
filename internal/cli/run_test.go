@@ -164,6 +164,40 @@ func TestRunAgent_HarnessLoadPipeline(t *testing.T) {
 	assert.Contains(t, err.Error(), "openshell")
 }
 
+func TestRunAgent_YMLFallback(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "harness"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "agents"), 0o755))
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "agents", "code.md"),
+		[]byte("You are a coding agent."),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "harness", "code.yml"),
+		[]byte("agent: agents/code.md\n"),
+		0o644,
+	))
+
+	rFlags := resolveFlags{maxDepth: 10, maxResources: 50}
+	printer := ui.New(io.Discard)
+	err := runAgent(context.Background(), "code", dir, "", "/tmp/repo", "", nil, false, "", "", rFlags, statusOpts{}, printer, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "openshell")
+}
+
+func TestRunAgent_HarnessNotFound(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "harness"), 0o755))
+
+	rFlags := resolveFlags{maxDepth: 10, maxResources: 50}
+	printer := ui.New(io.Discard)
+	err := runAgent(context.Background(), "nonexistent", dir, "", "/tmp/repo", "", nil, false, "", "", rFlags, statusOpts{}, printer, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "harness file not found: tried nonexistent.yaml and nonexistent.yml")
+}
+
 func TestRunAgent_HarnessLoadWithOrgConfig(t *testing.T) {
 	// Same as above but with a config.yaml present, covering the
 	// orgCfg != nil → orgAllowlist path.
@@ -1209,6 +1243,44 @@ func TestBootstrapEnv_SkipsFetchVarsWhenEmpty(t *testing.T) {
 	assert.Contains(t, err.Error(), "copying .env file to sandbox")
 }
 
+func TestShouldStartFetchService_AllowRuntimeFetch(t *testing.T) {
+	h := &harness.Harness{
+		Agent:                  "agents/test.md",
+		AllowRuntimeFetch:      true,
+		AllowedRemoteResources: []string{"https://github.com/org/"},
+	}
+	start, warning := shouldStartFetchService(h)
+	assert.True(t, start)
+	assert.Empty(t, warning)
+}
+
+func TestShouldStartFetchService_URLSkills(t *testing.T) {
+	h := &harness.Harness{
+		Agent:  "agents/test.md",
+		Skills: []string{"https://github.com/org/skills/tree/abc/rust#sha256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
+	}
+	start, warning := shouldStartFetchService(h)
+	assert.True(t, start)
+	assert.Empty(t, warning)
+}
+
+func TestShouldStartFetchService_AllowedRemoteResourcesOnly(t *testing.T) {
+	h := &harness.Harness{
+		Agent:                  "agents/test.md",
+		AllowedRemoteResources: []string{"https://github.com/org/"},
+	}
+	start, warning := shouldStartFetchService(h)
+	assert.True(t, start)
+	assert.Contains(t, warning, "deprecated")
+}
+
+func TestShouldStartFetchService_NoRemoteResources(t *testing.T) {
+	h := &harness.Harness{Agent: "agents/test.md"}
+	start, warning := shouldStartFetchService(h)
+	assert.False(t, start)
+	assert.Empty(t, warning)
+}
+
 func TestSetupFetchService_WithForgeClient(t *testing.T) {
 	tmpDir := t.TempDir()
 	h := &harness.Harness{Agent: "agents/test.md"}
@@ -1239,6 +1311,7 @@ func TestSetupFetchService_ResolvesTokenWhenNoForgeClient(t *testing.T) {
 	h := &harness.Harness{
 		Agent:                  "agents/test.md",
 		AllowedRemoteResources: []string{"https://github.com/org/"},
+		AllowRuntimeFetch:      true,
 	}
 
 	tokenResolved := false
@@ -1283,11 +1356,43 @@ func TestSetupFetchService_NoForgeClientNoRemoteResources(t *testing.T) {
 	assert.NotEmpty(t, env.addr)
 }
 
+func TestSetupFetchService_CustomMaxFetches(t *testing.T) {
+	tmpDir := t.TempDir()
+	maxFetches := 50
+	h := &harness.Harness{
+		Agent:                  "agents/test.md",
+		AllowRuntimeFetch:      true,
+		AllowedRemoteResources: []string{"https://github.com/org/"},
+		MaxRuntimeFetches:      &maxFetches,
+	}
+
+	cfg := fetchsvc.ServiceConfig{
+		Harness:       h,
+		WorkspaceRoot: tmpDir,
+		MaxFetches:    h.EffectiveMaxRuntimeFetches(),
+	}
+	assert.Equal(t, 50, cfg.MaxFetches)
+
+	env, shutdown, err := setupFetchService(
+		context.Background(),
+		nil,
+		h,
+		func() (string, error) { return "ghp_test", nil },
+		cfg,
+		func(string) {},
+	)
+	require.NoError(t, err)
+	defer shutdown()
+
+	assert.NotEmpty(t, env.addr)
+}
+
 func TestSetupFetchService_TokenResolutionFails(t *testing.T) {
 	tmpDir := t.TempDir()
 	h := &harness.Harness{
 		Agent:                  "agents/test.md",
 		AllowedRemoteResources: []string{"https://github.com/org/"},
+		AllowRuntimeFetch:      true,
 	}
 
 	var warned string
@@ -1308,6 +1413,14 @@ func TestSetupFetchService_TokenResolutionFails(t *testing.T) {
 
 	assert.NotEmpty(t, env.addr)
 	assert.Contains(t, warned, "no token available")
+}
+
+func TestEffectiveMaxRuntimeFetches_MatchesFetchsvcDefault(t *testing.T) {
+	h := &harness.Harness{}
+	if h.EffectiveMaxRuntimeFetches() != fetchsvc.DefaultMaxFetches {
+		t.Fatalf("harness default %d != fetchsvc.DefaultMaxFetches %d — update defaultMaxRuntimeFetches in harness.go",
+			h.EffectiveMaxRuntimeFetches(), fetchsvc.DefaultMaxFetches)
+	}
 }
 
 type mockForgeClient struct {

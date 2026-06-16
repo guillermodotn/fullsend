@@ -217,9 +217,9 @@ func TestVendorBinaryLayer_Analyze_ManifestAligned(t *testing.T) {
 	client := &forge.FakeClient{
 		FileContents: map[string][]byte{
 			"test-org/.fullsend/bin/fullsend":                          []byte("binary-data"),
-			"test-org/.fullsend/.defaults/action.yml":                []byte("marker"),
+			"test-org/.fullsend/.defaults/action.yml":                  []byte("marker"),
 			"test-org/.fullsend/.github/workflows/reusable-triage.yml": []byte("workflow"),
-			"test-org/.fullsend/vendor-manifest.yaml":                manifestYAML,
+			"test-org/.fullsend/vendor-manifest.yaml":                  manifestYAML,
 		},
 	}
 	layer, _ := newVendorBinaryLayer(t, client, true, nil)
@@ -240,9 +240,9 @@ func TestVendorBinaryLayer_Analyze_ManifestMissingPath(t *testing.T) {
 
 	client := &forge.FakeClient{
 		FileContents: map[string][]byte{
-			"test-org/.fullsend/bin/fullsend":           []byte("binary-data"),
-			"test-org/.fullsend/.defaults/action.yml":   []byte("marker"),
-			"test-org/.fullsend/vendor-manifest.yaml":   manifestYAML,
+			"test-org/.fullsend/bin/fullsend":         []byte("binary-data"),
+			"test-org/.fullsend/.defaults/action.yml": []byte("marker"),
+			"test-org/.fullsend/vendor-manifest.yaml": manifestYAML,
 		},
 	}
 	layer, _ := newVendorBinaryLayer(t, client, true, nil)

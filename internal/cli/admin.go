@@ -535,7 +535,7 @@ Inference authentication:
 				if err := ensureConfigRepoExists(ctx, client, printer, org); err != nil {
 					return err
 				}
-				creds, err := runAppSetup(ctx, client, printer, org, roles, mintProject, publicApps, sharedSlugs, appSet, perOrgStoredIDs)
+				creds, err := runAppSetup(ctx, client, printer, org, roles, mintProject, mintURL, publicApps, sharedSlugs, appSet, perOrgStoredIDs)
 				if err != nil {
 					return err
 				}
@@ -890,7 +890,7 @@ func runPerRepoInstall(ctx context.Context, c perRepoInstallConfig) error {
 			}
 		}
 
-		creds, credErr := runAppSetup(ctx, client, printer, owner, roles, mintProject, publicApps, sharedSlugs, c.AppSet, existingIDs)
+		creds, credErr := runAppSetup(ctx, client, printer, owner, roles, mintProject, mintURL, publicApps, sharedSlugs, c.AppSet, existingIDs)
 		if credErr != nil {
 			return credErr
 		}
@@ -1024,22 +1024,17 @@ func applyPerRepoScaffold(ctx context.Context, client forge.Client, printer *ui.
 	if err != nil {
 		return fmt.Errorf("getting repo info: %w", err)
 	}
+	commitMsg := fmt.Sprintf("chore: initialize fullsend-%s per-repo installation", version)
 	printer.StepStart(fmt.Sprintf("Committing scaffold files to %s/%s (%s branch)",
 		owner, repo, targetRepo.DefaultBranch))
-	committed, err := client.CommitFiles(ctx, owner, repo,
-		fmt.Sprintf("chore: initialize fullsend-%s per-repo installation", version), files)
-	if err != nil {
-		printer.StepFail("Failed to commit scaffold files")
-		return fmt.Errorf("committing scaffold files: %w", err)
-	}
-	if committed {
-		noun := "files"
-		if len(files) == 1 {
-			noun = "file"
-		}
-		printer.StepDone(fmt.Sprintf("Pushed %d %s to %s", len(files), noun, targetRepo.DefaultBranch))
-	} else {
-		printer.StepDone("Scaffold up to date")
+	prBody := fmt.Sprintf("This PR adds the fullsend scaffold files for per-repo installation.\n\n"+
+		"The default branch (%s) has branch protection rules that prevent direct pushes, "+
+		"so these files are delivered via PR instead.\n\n"+
+		"Merge this PR to activate fullsend workflows.", targetRepo.DefaultBranch)
+	if _, err := layers.CommitScaffoldFiles(ctx, client, printer,
+		owner, repo, targetRepo.DefaultBranch,
+		commitMsg, "chore: initialize fullsend per-repo installation", prBody, files); err != nil {
+		return err
 	}
 
 	printer.StepStart("Configuring repository variables")
@@ -1220,7 +1215,7 @@ func runDryRun(ctx context.Context, client forge.Client, printer *ui.Printer, or
 		dispatcher = gcf.NewProvisioner(gcf.Config{}, nil)
 	}
 	vendorFn, vendorCollect := vendorStackArgs(vendor, fullsendBinary, fullsendSource)
-	stack := buildLayerStack(org, client, cfg, printer, user, privateRepo, enabledRepos, agentCreds, enrolledRepoIDs, inferenceProvider, vendor, vendorFn, vendorCollect, "", dispatcher)
+	stack := buildLayerStack(org, client, cfg, printer, user, privateRepo, enabledRepos, agentCreds, enrolledRepoIDs, inferenceProvider, vendor, vendorFn, vendorCollect, "", dispatcher, commitSHA)
 
 	if err := runPreflight(ctx, stack, layers.OpInstall, client, printer); err != nil {
 		return err
@@ -1336,8 +1331,11 @@ func detectSharedApps(ctx context.Context, client forge.Client, printer *ui.Prin
 
 // runAppSetup creates or reuses GitHub Apps for each role. When mintProject is
 // non-empty, PEMs are also stored in GCP Secret Manager during app creation so
-// they survive partial provisioning failures.
-func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, org string, roles []string, mintProject string, publicApps bool, sharedSlugs map[string]string, appSet string, storedAppIDs map[string]string) ([]layers.AgentCredentials, error) {
+// they survive partial provisioning failures. When mintURL is non-empty but
+// mintProject is empty (e.g. the "github setup" flow), PEMs are managed by a
+// remote mint — the secret-existence check is skipped and existing apps are
+// reused silently.
+func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, org string, roles []string, mintProject string, mintURL string, publicApps bool, sharedSlugs map[string]string, appSet string, storedAppIDs map[string]string) ([]layers.AgentCredentials, error) {
 	printer.Header("Setting up GitHub Apps")
 	printer.Blank()
 
@@ -1369,26 +1367,31 @@ func runAppSetup(ctx context.Context, client forge.Client, printer *ui.Printer, 
 		}, gcf.NewLiveGCFClient(mintProject))
 	}
 
-	// In OIDC mint mode, PEMs live in Secret Manager — check there.
+	// In OIDC mint mode with direct GCP access, PEMs live in Secret
+	// Manager — check there.  When only a mint URL is available (no local
+	// GCP project), the remote mint manages PEMs and we cannot verify
+	// their existence — skip the check so handleExistingApp assumes reuse.
 	// Otherwise, check GitHub repo secrets.
 	if pemProvisioner != nil {
 		setup = setup.WithSecretExists(func(role string) (bool, error) {
 			return pemProvisioner.SecretExists(ctx, role)
 		})
-	} else {
+	} else if mintURL == "" {
 		setup = setup.WithSecretExists(func(role string) (bool, error) {
 			secretName := fmt.Sprintf("FULLSEND_%s_APP_PRIVATE_KEY", strings.ToUpper(role))
 			return client.RepoSecretExists(ctx, org, forge.ConfigRepoName, secretName)
 		})
 	}
 
-	// In OIDC mint mode, store PEMs only in Secret Manager.
+	// In OIDC mint mode with direct GCP access, store PEMs only in Secret
+	// Manager.  When only a mint URL is available, PEM storage is handled
+	// by the remote mint — skip local storage.
 	// Otherwise, store in GitHub repo secrets.
 	if pemProvisioner != nil {
 		setup = setup.WithStoreSecret(func(sctx context.Context, role, pem string) error {
 			return pemProvisioner.StoreAgentPEM(sctx, role, []byte(pem))
 		})
-	} else {
+	} else if mintURL == "" {
 		setup = setup.WithStoreSecret(func(sctx context.Context, role, pem string) error {
 			secretName := fmt.Sprintf("FULLSEND_%s_APP_PRIVATE_KEY", strings.ToUpper(role))
 			return client.CreateRepoSecret(sctx, org, forge.ConfigRepoName, secretName, pem)
@@ -1574,7 +1577,7 @@ func runInstall(ctx context.Context, client forge.Client, printer *ui.Printer, o
 	}
 
 	vendorFn, vendorCollect := vendorStackArgs(vendor, fullsendBinary, fullsendSource)
-	stack := buildLayerStack(org, client, cfg, printer, user, privateRepo, enabledRepos, agentCreds, enrolledRepoIDs, inferenceProvider, vendor, vendorFn, vendorCollect, "", disp)
+	stack := buildLayerStack(org, client, cfg, printer, user, privateRepo, enabledRepos, agentCreds, enrolledRepoIDs, inferenceProvider, vendor, vendorFn, vendorCollect, "", disp, commitSHA)
 
 	if err := runPreflight(ctx, stack, layers.OpInstall, client, printer); err != nil {
 		return err
@@ -1820,7 +1823,7 @@ func runAnalyze(ctx context.Context, client forge.Client, printer *ui.Printer, o
 	}
 
 	dispatcher := gcf.NewProvisioner(gcf.Config{}, nil)
-	stack := buildLayerStack(org, client, cfg, printer, user, privateRepo, nil, agentCreds, nil, inferenceProvider, false, nil, nil, analyzeFullsendSource, dispatcher)
+	stack := buildLayerStack(org, client, cfg, printer, user, privateRepo, nil, agentCreds, nil, inferenceProvider, false, nil, nil, analyzeFullsendSource, dispatcher, commitSHA)
 
 	if err := runPreflight(ctx, stack, layers.OpAnalyze, client, printer); err != nil {
 		return err
@@ -1853,6 +1856,7 @@ func buildLayerStack(
 	vendorCollect layers.VendorCollectFunc,
 	analyzeFullsendSource string,
 	dispatcher dispatch.Dispatcher,
+	commitSHA string,
 ) *layers.Stack {
 	dispatchLayer := layers.NewOIDCDispatchLayer(org, client, enrolledRepoIDs, dispatcher, printer)
 
@@ -1869,6 +1873,7 @@ func buildLayerStack(
 	return layers.NewStack(
 		layers.NewConfigRepoLayer(org, client, cfg, printer, privateRepo),
 		workflowsLayer(org, client, printer, user, version, vendor, vendorCollect),
+		layers.NewHarnessWrappersLayer(org, client, printer, agentCreds, commitSHA),
 		vendorLayer(org, client, printer, vendor, vendorFn, vendorCollect, analyzeFullsendSource),
 		layers.NewSecretsLayer(org, client, agentCreds, printer).WithOIDCMode(),
 		layers.NewInferenceLayer(org, client, inferenceProvider, printer),
