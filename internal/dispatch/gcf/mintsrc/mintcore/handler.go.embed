@@ -45,8 +45,9 @@ type Handler struct {
 
 	githubBaseURL string
 
-	roleAppIDs   map[string]string
-	allowedRoles []string
+	roleAppIDs       map[string]string
+	allowedRoles     []string
+	legacyAppIDsOnly bool // ROLE_APP_IDS has org/role keys but no role-only keys
 }
 
 // NewHandler creates a Handler with the given dependencies.
@@ -71,9 +72,7 @@ func NewHandler(pemAccessor PEMAccessor, oidcVerifier OIDCVerifier) (*Handler, e
 			return nil, fmt.Errorf("failed to parse ROLE_APP_IDS: %w", err)
 		}
 		h.roleAppIDs = RoleOnlyAppIDs(ids)
-		if len(h.roleAppIDs) == 0 && len(ids) > 0 {
-			log.Printf("WARNING: ROLE_APP_IDS has %d entries but no role-only keys; all token requests will be rejected until role-only keys are configured", len(ids))
-		}
+		h.legacyAppIDsOnly = legacyAppIDsOnly(ids)
 	}
 
 	roleSet := make(map[string]bool, len(h.roleAppIDs))
@@ -112,9 +111,7 @@ func NewHandler(pemAccessor PEMAccessor, oidcVerifier OIDCVerifier) (*Handler, e
 // ServeHTTP handles incoming token mint requests.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && r.URL.Path == "/health" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintln(w, `{"status":"ok"}`)
+		h.handleHealth(w)
 		return
 	}
 
@@ -256,6 +253,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+func (h *Handler) handleHealth(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	if h.legacyAppIDsOnly {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{
+			"status": "unhealthy",
+			"reason": "ROLE_APP_IDS contains legacy org/role keys but no role-only keys; migration required",
+		})
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintln(w, `{"status":"ok"}`)
+}
+
 func (h *Handler) handleStatus(w http.ResponseWriter, claims *Claims) {
 	org := strings.ToLower(claims.RepositoryOwner)
 	roles := append([]string(nil), h.allowedRoles...)
@@ -313,6 +324,20 @@ func (h *Handler) mintToken(ctx context.Context, org, role string, repos []strin
 func (h *Handler) checkAllowedRole(role string) bool {
 	for _, entry := range h.allowedRoles {
 		if entry == role {
+			return true
+		}
+	}
+	return false
+}
+
+// legacyAppIDsOnly reports whether ids contains org/role keys but no role-only
+// keys. An empty map or unset ROLE_APP_IDS is not a migration failure.
+func legacyAppIDsOnly(ids map[string]string) bool {
+	if len(ids) == 0 || len(RoleOnlyAppIDs(ids)) > 0 {
+		return false
+	}
+	for key := range ids {
+		if strings.Contains(key, "/") {
 			return true
 		}
 	}

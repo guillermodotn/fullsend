@@ -288,21 +288,50 @@ func TestRoleOnlyAppIDs_ReturnsNilForEmpty(t *testing.T) {
 	}
 }
 
-func TestNewHandler_WarnsWhenOnlyLegacyRoleAppIDs(t *testing.T) {
+func TestLegacyAppIDsOnly(t *testing.T) {
+	if legacyAppIDsOnly(nil) {
+		t.Fatal("expected false for nil")
+	}
+	if legacyAppIDsOnly(map[string]string{}) {
+		t.Fatal("expected false for empty map")
+	}
+	if legacyAppIDsOnly(map[string]string{"coder": "100"}) {
+		t.Fatal("expected false for role-only keys")
+	}
+	if legacyAppIDsOnly(map[string]string{"acme/coder": "100", "coder": "200"}) {
+		t.Fatal("expected false when role-only keys present")
+	}
+	if !legacyAppIDsOnly(map[string]string{"acme/coder": "100"}) {
+		t.Fatal("expected true for legacy-only keys")
+	}
+}
+
+func TestHandler_HealthEndpoint_EmptyMint(t *testing.T) {
+	t.Setenv("ROLE_APP_IDS", "")
+	t.Setenv("ALLOWED_ROLES", "")
+	h := mustNewHandler(t, &fakePEMAccessor{}, &fakeOIDCVerifier{})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /health: expected 200 for empty mint, got %d", rec.Code)
+	}
+}
+
+func TestHandler_HealthEndpoint_LegacyOnlyRoleAppIDs(t *testing.T) {
 	t.Setenv("ROLE_APP_IDS", `{"test-org/coder":"200"}`)
 	t.Setenv("ALLOWED_ROLES", "")
+	h := mustNewHandler(t, &fakePEMAccessor{}, &fakeOIDCVerifier{})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	h.ServeHTTP(rec, req)
 
-	var buf bytes.Buffer
-	orig := log.Writer()
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(orig) })
-
-	_, err := NewHandler(&fakePEMAccessor{}, &fakeOIDCVerifier{})
-	if err != nil {
-		t.Fatalf("NewHandler: %v", err)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET /health: expected 503 for legacy-only ROLE_APP_IDS, got %d", rec.Code)
 	}
-	if !strings.Contains(buf.String(), "no role-only keys") {
-		t.Fatalf("expected legacy-only ROLE_APP_IDS warning, got log: %q", buf.String())
+	if !strings.Contains(rec.Body.String(), "unhealthy") {
+		t.Fatalf("expected unhealthy status, got %q", rec.Body.String())
 	}
 }
 
