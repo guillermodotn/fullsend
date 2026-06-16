@@ -1664,6 +1664,47 @@ func TestInstallCmd_PerRepoDryRun_Vendor(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestRunDryRun_WithDiscoveredRepos(t *testing.T) {
+	client := forge.NewFakeClient()
+	client.AuthenticatedUser = "testuser"
+	discovered := []forge.Repository{
+		{Name: forge.ConfigRepoName, FullName: "testorg/" + forge.ConfigRepoName, DefaultBranch: "main"},
+		{Name: "myrepo", FullName: "testorg/myrepo", DefaultBranch: "main"},
+	}
+	client.Repos = discovered
+
+	var buf bytes.Buffer
+	printer := ui.New(&buf)
+	err := runDryRun(
+		context.Background(), client, printer, "testorg",
+		[]string{"myrepo"},
+		config.DefaultAgentRoles(),
+		nil,
+		"",
+		true,
+		"https://mint.example.com/v1/token",
+		discovered,
+		true,
+		"",
+		"",
+	)
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Layer: vendor")
+}
+
+func TestRunAnalyze_WithFakeClient(t *testing.T) {
+	client := forge.NewFakeClient()
+	client.AuthenticatedUser = "testuser"
+	client.Repos = []forge.Repository{
+		{Name: forge.ConfigRepoName, FullName: "testorg/" + forge.ConfigRepoName},
+	}
+
+	var buf bytes.Buffer
+	err := runAnalyze(context.Background(), client, ui.New(&buf), "testorg", "")
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Layer:")
+}
+
 func TestFilterSlugsByAppSet(t *testing.T) {
 	tests := []struct {
 		name   string

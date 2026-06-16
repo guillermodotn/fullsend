@@ -30,8 +30,10 @@ vendored files without `config.yaml` distribution settings.
 
 ### Install-time: `--vendor`
 
-`fullsend admin install`, `fullsend github setup`, and
-`fullsend github sync-scaffold` accept:
+`fullsend admin install` and `fullsend github setup` accept `--vendor` and related
+flags. `fullsend github sync-scaffold` does **not** take `--vendor`; it
+auto-detects vendored mode from the presence of `.defaults/action.yml` in
+the config repo and rewrites scaffold files accordingly.
 
 | Flag | Purpose |
 |------|---------|

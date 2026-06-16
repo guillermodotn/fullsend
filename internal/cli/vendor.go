@@ -168,6 +168,8 @@ func prepareVendorFiles(printer *ui.Printer, owner, repo, fullsendBinary, fullse
 	}
 
 	manifest := scaffold.NewVendorManifest(version, fullsendSource, destPath, scaffold.PathsFromInstallFiles(assets))
+	// Manifest is built locally from collected assets; ParseVendorManifest validates
+	// paths when reading a committed manifest from the repo.
 	manifestYAML, err := manifest.MarshalYAML()
 	if err != nil {
 		cleanup()

@@ -85,6 +85,8 @@ func (l *WorkflowsLayer) Install(ctx context.Context) error {
 	})
 
 	vendorAssetCount := 0
+	// Vendored marker paths must stay aligned with reusable workflow hashFiles
+	// checks (see .github workflows and scaffold.VendoredMarkerPath).
 	if l.vendored && l.vendorCollect != nil {
 		vendorFiles, count, err := l.vendorCollect(ctx, l.ui, l.org, forge.ConfigRepoName)
 		if err != nil {

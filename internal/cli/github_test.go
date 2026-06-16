@@ -522,6 +522,29 @@ func TestRunGitHubSyncScaffold_InvalidConfig(t *testing.T) {
 	assert.Contains(t, err.Error(), "parsing config.yaml")
 }
 
+func TestRunGitHubSetupPerOrg_DryRun(t *testing.T) {
+	client := forge.NewFakeClient()
+	client.AuthenticatedUser = "testuser"
+	client.Repos = []forge.Repository{
+		{Name: forge.ConfigRepoName, FullName: "acme/" + forge.ConfigRepoName},
+		{Name: "widget", FullName: "acme/widget"},
+	}
+	var buf strings.Builder
+	err := runGitHubSetupPerOrg(context.Background(), client, ui.New(&buf), githubSetupConfig{
+		target:               "acme",
+		mintURL:              "https://mint.example.com/v1/token",
+		agents:               strings.Join(config.DefaultAgentRoles(), ","),
+		inferenceProject:     "my-project",
+		inferenceWIFProvider: "projects/123456789/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc",
+		dryRun:               true,
+		enrollNone:           true,
+		skipAppSetup:         true,
+		vendor:               true,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Layer: vendor")
+}
+
 // --- parseTarget tests ---
 
 func TestParseTarget_Org(t *testing.T) {

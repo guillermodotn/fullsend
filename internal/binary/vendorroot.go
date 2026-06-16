@@ -63,7 +63,7 @@ func ResolveVendorRoot(sourceDir, version string) (VendorRoot, error) {
 	}
 
 	if !IsReleasedVersion(version) {
-		return VendorRoot{}, fmt.Errorf("cannot resolve fullsend source: not in a checkout and CLI version %s is a dev build — use --fullsend-source, run from a checkout, or use a released CLI", version)
+		return VendorRoot{}, fmt.Errorf("cannot resolve fullsend source: not in a checkout and CLI version %s is a dev build; use --fullsend-source, run from a checkout, or use a released CLI", version)
 	}
 
 	tmpDir, err := os.MkdirTemp("", "fullsend-source-*")
