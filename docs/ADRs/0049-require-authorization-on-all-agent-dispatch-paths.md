@@ -1,5 +1,5 @@
 ---
-title: "43. Require authorization on all agent dispatch paths"
+title: "49. Require authorization on all agent dispatch paths"
 status: Accepted
 relates_to:
   - agent-architecture
@@ -10,7 +10,7 @@ topics:
   - dispatch
 ---
 
-# 43. Require authorization on all agent dispatch paths
+# 49. Require authorization on all agent dispatch paths
 
 Date: 2026-05-29
 
@@ -173,6 +173,7 @@ to OWNER/MEMBER/COLLABORATOR), it should do so by extending the
   maintainers to trigger agents on their behalf — an acceptable
   trade-off to keep the abuse surface minimal.
 - Future work: rate-limited auto-triage for external issue reporters
-  (e.g., via [vouch](https://github.com/mitchellh/vouch) or per-org
-  trust policies) could relax this boundary for drive-by bug reports
-  without re-opening the abuse surface for slash commands.
+  ([#1687](https://github.com/fullsend-ai/fullsend/issues/1687),
+  [vouch](https://github.com/mitchellh/vouch), or per-org trust
+  policies) could relax this boundary for drive-by bug reports without
+  re-opening the abuse surface for slash commands.
