@@ -716,7 +716,7 @@ func TestHandler_FullFlowGrantedScopeAll(t *testing.T) {
 	}
 
 	env := newTestOIDCEnv(t, &fakePEMAccessor{
-		pems: map[string][]byte{"test-org/coder": pemData},
+		pems: map[string][]byte{"coder": pemData},
 	})
 	token := env.signToken(t, nil)
 
@@ -1856,7 +1856,7 @@ func TestHandler_LogsRequestedPermissionNotGranted(t *testing.T) {
 	}
 
 	env := newTestOIDCEnv(t, &fakePEMAccessor{
-		pems: map[string][]byte{"test-org/coder": pemData},
+		pems: map[string][]byte{"coder": pemData},
 	})
 	token := env.signToken(t, nil)
 

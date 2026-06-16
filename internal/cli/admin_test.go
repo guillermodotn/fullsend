@@ -55,9 +55,9 @@ func TestInstallCmd_Flags(t *testing.T) {
 	skipAppSetupFlag := cmd.Flags().Lookup("skip-app-setup")
 	require.NotNil(t, skipAppSetupFlag, "expected --skip-app-setup flag")
 
-	vendorBinaryFlag := cmd.Flags().Lookup("vendor-fullsend-binary")
-	require.NotNil(t, vendorBinaryFlag, "expected --vendor-fullsend-binary flag")
-	assert.Equal(t, "false", vendorBinaryFlag.DefValue)
+	vendorFlag := cmd.Flags().Lookup("vendor")
+	require.NotNil(t, vendorFlag, "expected --vendor flag")
+	assert.Equal(t, "false", vendorFlag.DefValue)
 
 	inferenceProjectFlag := cmd.Flags().Lookup("inference-project")
 	require.NotNil(t, inferenceProjectFlag, "expected --inference-project flag")
@@ -228,7 +228,7 @@ func TestInstallCmd_PerRepoAcceptsSharedFlags(t *testing.T) {
 		{"mint-source-dir", "/tmp/src"},
 		{"skip-mint-deploy", ""},
 		{"app-set", "custom-prefix"},
-		{"vendor-fullsend-binary", ""},
+		{"vendor", ""},
 	}
 	for _, tc := range sharedFlags {
 		t.Run(tc.flag, func(t *testing.T) {
@@ -1100,6 +1100,8 @@ func TestBuildLayerStack_NilEnabledRepos_SkipsDisabledRepos(t *testing.T) {
 		nil,   // inferenceProvider
 		false, // vendorBinary
 		nil,   // vendorFn
+		nil,   // vendorCollect
+		"",    // analyzeFullsendSource
 		nil,   // dispatcher
 		"dev", // commitSHA
 	)
@@ -1136,8 +1138,7 @@ func TestBuildLayerStack_EmptyEnabledRepos_IncludesDisabledRepos(t *testing.T) {
 		"test-org", nil, cfg, printer, "user",
 		false,
 		[]string{}, // explicitly empty (not nil)
-		nil, nil, nil, false, nil, nil,
-		"dev", // commitSHA
+		nil, nil, nil, false, nil, nil, "", nil, "dev",
 	)
 
 	// The enrollment layer should have disabled repos to reconcile.
@@ -1214,7 +1215,7 @@ func TestCheckInstallScopes_SyncWithLayers(t *testing.T) {
 	emptyCfg := &config.OrgConfig{}
 	stack := layers.NewStack(
 		layers.NewConfigRepoLayer("test-org", nil, emptyCfg, ui.New(&discardWriter{}), false),
-		layers.NewWorkflowsLayer("test-org", nil, ui.New(&discardWriter{}), "", "test-version"),
+		layers.NewWorkflowsLayer("test-org", nil, ui.New(&discardWriter{}), "", "test-version", false),
 		layers.NewHarnessWrappersLayer("test-org", nil, ui.New(&discardWriter{}), nil, "dev"),
 		layers.NewSecretsLayer("test-org", nil, nil, ui.New(&discardWriter{})),
 		layers.NewInferenceLayer("test-org", nil, nil, ui.New(&discardWriter{})),
@@ -1650,6 +1651,244 @@ func TestInstallCmd_PerRepoAcceptsValidWIFProvider(t *testing.T) {
 		"--dry-run"})
 	err := cmd.Execute()
 	require.NoError(t, err)
+}
+
+func TestInstallCmd_PerRepoDryRun_Vendor(t *testing.T) {
+	t.Setenv("GH_TOKEN", "test-token")
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"admin", "install", "acme/widget",
+		"--mint-url", "https://mint-test-abc123.run.app",
+		"--inference-project", "my-project",
+		"--inference-wif-provider", "projects/123456789/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc",
+		"--dry-run",
+		"--vendor"})
+	err := cmd.Execute()
+	require.NoError(t, err)
+}
+
+func TestRunDryRun_WithDiscoveredRepos(t *testing.T) {
+	client := forge.NewFakeClient()
+	client.AuthenticatedUser = "testuser"
+	discovered := []forge.Repository{
+		{Name: forge.ConfigRepoName, FullName: "testorg/" + forge.ConfigRepoName, DefaultBranch: "main"},
+		{Name: "myrepo", FullName: "testorg/myrepo", DefaultBranch: "main"},
+	}
+	client.Repos = discovered
+
+	var buf bytes.Buffer
+	printer := ui.New(&buf)
+	err := runDryRun(
+		context.Background(), client, printer, "testorg",
+		[]string{"myrepo"},
+		config.DefaultAgentRoles(),
+		nil,
+		"",
+		true,
+		"https://mint.example.com/v1/token",
+		discovered,
+		true,
+		"",
+		"",
+	)
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Layer: vendor")
+}
+
+func TestRunAnalyze_WithFakeClient(t *testing.T) {
+	client := forge.NewFakeClient()
+	client.AuthenticatedUser = "testuser"
+	client.Repos = []forge.Repository{
+		{Name: forge.ConfigRepoName, FullName: "testorg/" + forge.ConfigRepoName},
+	}
+
+	var buf bytes.Buffer
+	err := runAnalyze(context.Background(), client, ui.New(&buf), "testorg", "")
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Layer:")
+}
+
+func TestRunInstall_RequiresAgentCredsWhenMintEnabled(t *testing.T) {
+	client := forge.NewFakeClient()
+	client.AuthenticatedUser = "testuser"
+	discovered := []forge.Repository{
+		{Name: forge.ConfigRepoName, FullName: "testorg/" + forge.ConfigRepoName},
+	}
+	client.Repos = discovered
+
+	err := runInstall(
+		context.Background(), client, ui.New(&bytes.Buffer{}), "testorg",
+		[]string{}, config.DefaultAgentRoles(), nil,
+		nil, "",
+		false, "", "",
+		"gcf", "test-project", "us-central1", "", true,
+		"https://mint.example.com/v1/token",
+		false,
+		discovered,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "OIDC mint requires")
+}
+
+func TestRunInstall_WithSkipMintCheck(t *testing.T) {
+	cfg := setupTestConfig(map[string]bool{"myrepo": false})
+	client := setupTestClient("testorg", cfg, []string{"myrepo"})
+	client.AuthenticatedUser = "testuser"
+
+	var agentCreds []layers.AgentCredentials
+	for _, role := range config.DefaultAgentRoles() {
+		agentCreds = append(agentCreds, layers.AgentCredentials{
+			AgentEntry: config.AgentEntry{Role: role},
+		})
+	}
+
+	err := runInstall(
+		context.Background(), client, ui.New(&bytes.Buffer{}), "testorg",
+		nil, config.DefaultAgentRoles(), agentCreds,
+		nil, "",
+		false, "", "",
+		"gcf", "test-project", "us-central1", "", true,
+		"https://mint.example.com/v1/token",
+		true,
+		client.Repos,
+	)
+	require.NoError(t, err)
+}
+
+func TestRunInstall_DiscoversRepos(t *testing.T) {
+	cfg := setupTestConfig(map[string]bool{"myrepo": false})
+	client := setupTestClient("testorg", cfg, []string{"myrepo"})
+	client.AuthenticatedUser = "testuser"
+
+	var agentCreds []layers.AgentCredentials
+	for _, role := range config.DefaultAgentRoles() {
+		agentCreds = append(agentCreds, layers.AgentCredentials{
+			AgentEntry: config.AgentEntry{Role: role},
+		})
+	}
+
+	var buf bytes.Buffer
+	err := runInstall(
+		context.Background(), client, ui.New(&buf), "testorg",
+		nil, config.DefaultAgentRoles(), agentCreds,
+		nil, "",
+		false, "", "",
+		"gcf", "test-project", "us-central1", "", true,
+		"https://mint.example.com/v1/token",
+		true,
+		nil,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Discovering repositories")
+}
+
+func TestRunInstall_InvalidEnabledRepo(t *testing.T) {
+	client := forge.NewFakeClient()
+	client.AuthenticatedUser = "testuser"
+	discovered := []forge.Repository{
+		{Name: "myrepo", FullName: "testorg/myrepo"},
+	}
+
+	err := runInstall(
+		context.Background(), client, ui.New(&bytes.Buffer{}), "testorg",
+		[]string{"missing-repo"}, config.DefaultAgentRoles(), nil,
+		nil, "",
+		false, "", "",
+		"gcf", "test-project", "us-central1", "", true,
+		"https://mint.example.com/v1/token",
+		true,
+		discovered,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing-repo")
+}
+
+func TestRunInstall_WithVendorAndSkipMint(t *testing.T) {
+	cfg := setupTestConfig(map[string]bool{"myrepo": false})
+	client := setupTestClient("testorg", cfg, []string{"myrepo"})
+	client.AuthenticatedUser = "testuser"
+
+	var agentCreds []layers.AgentCredentials
+	for _, role := range config.DefaultAgentRoles() {
+		agentCreds = append(agentCreds, layers.AgentCredentials{
+			AgentEntry: config.AgentEntry{Role: role},
+		})
+	}
+
+	var buf bytes.Buffer
+	err := runInstall(
+		context.Background(), client, ui.New(&buf), "testorg",
+		nil, config.DefaultAgentRoles(), agentCreds,
+		nil, "",
+		true, "", "",
+		"gcf", "test-project", "us-central1", "", true,
+		"https://mint.example.com/v1/token",
+		true,
+		client.Repos,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "vendored assets")
+}
+
+func TestRunPerRepoInstall_ValidationErrors(t *testing.T) {
+	base := perRepoInstallConfig{
+		RepoFullName:     "acme/widget",
+		Agents:           strings.Join(config.PerRepoDefaultRoles(), ","),
+		InferenceProject: "my-project",
+		MintProject:      "my-project",
+		MintURL:          "https://mint.example.com/v1/token",
+		SkipMintCheck:    true,
+	}
+	tests := []struct {
+		name string
+		cfg  perRepoInstallConfig
+		want string
+	}{
+		{
+			name: "url not owner/repo",
+			cfg: func() perRepoInstallConfig {
+				c := base
+				c.RepoFullName = "https://github.com/acme/widget"
+				return c
+			}(),
+			want: "expected owner/repo format",
+		},
+		{
+			name: "invalid owner",
+			cfg: func() perRepoInstallConfig {
+				c := base
+				c.RepoFullName = "-bad/widget"
+				return c
+			}(),
+			want: "invalid owner name",
+		},
+		{
+			name: "missing inference project",
+			cfg: func() perRepoInstallConfig {
+				c := base
+				c.InferenceProject = ""
+				return c
+			}(),
+			want: "--inference-project is required",
+		},
+		{
+			name: "missing mint project without skip",
+			cfg: func() perRepoInstallConfig {
+				c := base
+				c.SkipMintCheck = false
+				c.MintURL = ""
+				c.MintProject = ""
+				return c
+			}(),
+			want: "--mint-project",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := runPerRepoInstall(context.Background(), tt.cfg)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
 }
 
 func TestFilterSlugsByAppSet(t *testing.T) {
