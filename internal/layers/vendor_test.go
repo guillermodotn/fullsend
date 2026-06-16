@@ -125,3 +125,9 @@ func TestDeleteVendoredPaths(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, removed)
 }
+
+func TestVendorCommitMessage_UnknownSource(t *testing.T) {
+	msg := VendorCommitMessage(binary.Source(99), "dev", "bin/fullsend", 512)
+	assert.Contains(t, msg, "chore: vendor fullsend binary for development")
+	assert.Contains(t, msg, "Path: bin/fullsend")
+}

@@ -99,6 +99,12 @@ func TestMakeVendorCollectFunc(t *testing.T) {
 	assert.Greater(t, count, 0)
 }
 
+func TestMakeVendorCollectFunc_InvalidBinary(t *testing.T) {
+	fn := makeVendorCollectFunc("/nonexistent/fullsend", "")
+	_, _, err := fn(context.Background(), ui.New(&strings.Builder{}), "org", "my-repo")
+	require.Error(t, err)
+}
+
 func TestAcquireAndVendor_ExplicitPath(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("needs Linux ELF binary")
@@ -158,6 +164,19 @@ func TestVendorStackArgs(t *testing.T) {
 func TestVendorPathPrefix(t *testing.T) {
 	assert.Equal(t, "", vendorPathPrefix("org", forge.ConfigRepoName))
 	assert.Equal(t, ".fullsend/", vendorPathPrefix("org", "my-repo"))
+}
+
+func TestMakeVendorFunc(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("needs Linux ELF binary")
+	}
+	exe, err := os.Executable()
+	require.NoError(t, err)
+
+	fn := makeVendorFunc(exe, "")
+	require.NotNil(t, fn)
+	err = fn(context.Background(), &forge.FakeClient{}, ui.New(&strings.Builder{}), "org", "my-repo")
+	require.NoError(t, err)
 }
 
 func TestApplyDeprecatedVendorBinaryFlag(t *testing.T) {

@@ -2,6 +2,7 @@ package scaffold
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -43,6 +44,13 @@ func TestVendorManifestCleanupPaths(t *testing.T) {
 	assert.Contains(t, paths, "vendor-manifest.yaml")
 }
 
+func TestVendorManifestCleanupPaths_PerRepo(t *testing.T) {
+	m := NewVendorManifest("dev", "", ".fullsend/bin/fullsend", []string{".fullsend/.defaults/action.yml"})
+	paths := m.CleanupPaths(".fullsend/")
+	assert.Contains(t, paths, ".fullsend/vendor-manifest.yaml")
+	assert.Contains(t, paths, ".fullsend/bin/fullsend")
+}
+
 func TestVendorManifestCleanupPathsRejectsUnsafePaths(t *testing.T) {
 	m := &VendorManifest{
 		Version:    vendorManifestVersion,
@@ -58,6 +66,12 @@ func TestVendorManifestCleanupPathsRejectsUnsafePaths(t *testing.T) {
 	assert.Contains(t, paths, ".github/workflows/reusable-triage.yml")
 	assert.NotContains(t, paths, "../../../etc/passwd")
 	assert.NotContains(t, paths, "../../secret")
+}
+
+func TestParseVendorManifestRejectsMissingBinaryPath(t *testing.T) {
+	_, err := ParseVendorManifest([]byte("version: \"1\"\npaths: []\n"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing binary_path")
 }
 
 func TestParseVendorManifestRejectsUnsafePaths(t *testing.T) {
@@ -80,6 +94,17 @@ func TestComparePathPresence(t *testing.T) {
 		[]string{".defaults/action.yml", ".github/workflows/reusable-triage.yml"})
 	require.NoError(t, err)
 	assert.Equal(t, []string{".github/workflows/reusable-triage.yml"}, missing)
+}
+
+func TestComparePathPresence_GetFileContentError(t *testing.T) {
+	client := &forge.FakeClient{
+		Errors: map[string]error{
+			"GetFileContent": errors.New("network down"),
+		},
+	}
+	_, err := ComparePathPresence(context.Background(), client, "org", ".fullsend", []string{".defaults/action.yml"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "checking .defaults/action.yml")
 }
 
 func TestManagedVendoredContentPaths(t *testing.T) {
@@ -116,6 +141,36 @@ func TestVendoredDefaultsInfraPathsMatchPredicate(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.ElementsMatch(t, vendoredDefaultsInfraPaths, walked)
+}
+
+func TestReadVendorManifest(t *testing.T) {
+	m := NewVendorManifest("dev", "", "bin/fullsend", []string{".defaults/action.yml"})
+	data, err := m.MarshalYAML()
+	require.NoError(t, err)
+
+	client := &forge.FakeClient{
+		FileContents: map[string][]byte{
+			"org/.fullsend/vendor-manifest.yaml": data,
+		},
+	}
+
+	got, found, err := ReadVendorManifest(context.Background(), client, "org", ".fullsend", "")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, m.BinaryPath, got.BinaryPath)
+}
+
+func TestReadVendorManifest_ParseError(t *testing.T) {
+	client := &forge.FakeClient{
+		FileContents: map[string][]byte{
+			"org/.fullsend/vendor-manifest.yaml": []byte("version: \"1\"\nbinary_path: ../bad\npaths:\n  - ../bad\n"),
+		},
+	}
+
+	_, found, err := ReadVendorManifest(context.Background(), client, "org", ".fullsend", "")
+	require.True(t, found)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not allowed")
 }
 
 func TestEnumerateVendoredPathsWithoutCheckout(t *testing.T) {
@@ -209,4 +264,9 @@ func TestCollectVendoredAssetsUsesDefaultsMirror(t *testing.T) {
 
 func TestVendoredMarkerPath(t *testing.T) {
 	assert.Equal(t, ".defaults/action.yml", VendoredMarkerPath())
+}
+
+func TestVendorManifestPath(t *testing.T) {
+	assert.Equal(t, "vendor-manifest.yaml", VendorManifestPath(""))
+	assert.Equal(t, ".fullsend/vendor-manifest.yaml", VendorManifestPath(".fullsend/"))
 }

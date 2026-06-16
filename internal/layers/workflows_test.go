@@ -52,6 +52,13 @@ func TestWorkflowsLayer_Name(t *testing.T) {
 	assert.Equal(t, "workflows", layer.Name())
 }
 
+func TestWorkflowsLayer_RequiredScopes(t *testing.T) {
+	layer, _ := newWorkflowsLayer(t, forge.NewFakeClient(), false)
+	assert.Equal(t, []string{"repo", "workflow"}, layer.RequiredScopes(OpInstall))
+	assert.Nil(t, layer.RequiredScopes(OpUninstall))
+	assert.Equal(t, []string{"repo"}, layer.RequiredScopes(OpAnalyze))
+}
+
 func TestWorkflowsLayer_Install_WritesAllFiles(t *testing.T) {
 	client := forge.NewFakeClient()
 	layer, _ := newWorkflowsLayer(t, client, false)
@@ -94,6 +101,19 @@ func TestWorkflowsLayer_Install_ActivatesRepoMaintenance(t *testing.T) {
 	assert.Equal(t, "config.yaml", client.CreatedFiles[0].Path)
 	assert.Equal(t, "chore: activate fullsend workflows", client.CreatedFiles[0].Message)
 	assert.Contains(t, buf.String(), "Activated repo-maintenance workflow")
+}
+
+func TestWorkflowsLayer_Install_ActivateRepoMaintenanceFailure(t *testing.T) {
+	client := forge.NewFakeClient()
+	client.FileContents["test-org/.fullsend/config.yaml"] = []byte("repos: {}\n")
+	client.Errors = map[string]error{
+		"CreateOrUpdateFile": errors.New("branch protected"),
+	}
+	layer, buf := newWorkflowsLayer(t, client, false)
+
+	err := layer.Install(context.Background())
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "repo-maintenance workflow was not activated automatically")
 }
 
 func TestWorkflowsLayer_Install_TriageWorkflowContent(t *testing.T) {

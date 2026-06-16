@@ -405,3 +405,10 @@ func TestVendorBinaryLayer_SetAnalyzeOptions_SkippedWithoutSource(t *testing.T) 
 	require.NoError(t, err)
 	assert.Contains(t, strings.Join(report.Details, " "), "source alignment: skipped")
 }
+
+func TestContainsWouldFix(t *testing.T) {
+	fixes := []string{"restore vendored path foo", "sync vendored path bar"}
+	assert.True(t, containsWouldFix(fixes, "foo"))
+	assert.True(t, containsWouldFix(fixes, "bar"))
+	assert.False(t, containsWouldFix(fixes, "baz"))
+}

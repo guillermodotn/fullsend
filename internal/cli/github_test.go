@@ -156,6 +156,19 @@ func TestGitHubSetupCmd_PerRepoDryRun(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestGitHubSetupCmd_PerRepoDryRun_Vendor(t *testing.T) {
+	t.Setenv("GH_TOKEN", "test-token")
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"github", "setup", "acme/widget",
+		"--mint-url", "https://mint-test-abc123.run.app",
+		"--inference-project", "my-project",
+		"--inference-wif-provider", "projects/123456789/locations/global/workloadIdentityPools/fullsend-pool/providers/github-oidc",
+		"--dry-run",
+		"--vendor"})
+	err := cmd.Execute()
+	require.NoError(t, err)
+}
+
 func TestGitHubSetupCmd_PerRepoRequiresInferenceProject(t *testing.T) {
 	t.Setenv("GH_TOKEN", "test-token")
 	cmd := newRootCmd()
@@ -476,6 +489,37 @@ func TestRunGitHubSyncScaffold_CommitsFiles(t *testing.T) {
 
 	// Verify at least one file was committed.
 	require.NotEmpty(t, client.CommittedFiles, "expected scaffold files to be committed")
+}
+
+func TestRunGitHubSyncScaffold_VendoredMarker(t *testing.T) {
+	client := forge.NewFakeClient()
+	client.Repos = []forge.Repository{
+		{Name: ".fullsend", FullName: "acme/.fullsend"},
+	}
+	client.AuthenticatedUser = "testuser"
+	client.FileContents = map[string][]byte{
+		"acme/.fullsend/.defaults/action.yml": []byte("marker"),
+		"acme/.fullsend/config.yaml":          []byte("repos: {}\n"),
+	}
+	printer := ui.New(&discardWriter{})
+
+	err := runGitHubSyncScaffold(context.Background(), client, printer, "acme")
+	require.NoError(t, err)
+	require.NotEmpty(t, client.CommittedFiles)
+}
+
+func TestRunGitHubSyncScaffold_InvalidConfig(t *testing.T) {
+	client := forge.NewFakeClient()
+	client.Repos = []forge.Repository{{Name: ".fullsend", FullName: "acme/.fullsend"}}
+	client.AuthenticatedUser = "testuser"
+	client.FileContents = map[string][]byte{
+		"acme/.fullsend/config.yaml": []byte("not: valid: yaml: ["),
+	}
+	printer := ui.New(&discardWriter{})
+
+	err := runGitHubSyncScaffold(context.Background(), client, printer, "acme")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parsing config.yaml")
 }
 
 // --- parseTarget tests ---
