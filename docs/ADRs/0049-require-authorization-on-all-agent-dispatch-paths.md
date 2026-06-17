@@ -97,7 +97,7 @@ read the actor's association from the appropriate event field (e.g.,
 | `issues.opened` / `issues.edited` | Issue opener | Yes |
 | `pull_request_target.opened` / `synchronize` | PR author | Yes |
 | `issues.labeled` | Label applier | Already implicit (requires write access) |
-| `pull_request_target.ready_for_review` | PR author/maintainer | Already implicit |
+| `pull_request_target.ready_for_review` | PR author | Yes (same branch as opened/synchronize) |
 | `pull_request_target.closed` | Closer | Already implicit (requires write access) |
 | `pull_request_review.submitted` | Reviewer | Already gated (requires review-bot authorship) |
 

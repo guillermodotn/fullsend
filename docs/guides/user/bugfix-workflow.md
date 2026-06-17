@@ -65,6 +65,9 @@ You can control the pipeline from issue or PR comments:
 | `/fs-fix-stop` | PR comment | Disables bot-triggered fix runs for this PR (human `/fs-fix` still works) |
 | `/fs-retro` | Issue or PR comment | Triggers a retrospective analysis of the workflow |
 
+All slash commands require OWNER, MEMBER, or COLLABORATOR repository
+association. Bot accounts bypass this check to preserve agent-to-agent handoffs.
+
 ### What to expect from agent PRs
 
 When the code agent opens a PR:

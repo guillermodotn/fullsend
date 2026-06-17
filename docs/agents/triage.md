@@ -22,6 +22,8 @@ The agent runs in a read-only sandbox. It cannot modify issues, push code, or in
 |---------|-------|--------|
 | `/fs-triage` | Issue comment | Runs triage on the issue |
 
+Requires OWNER, MEMBER, or COLLABORATOR repository association.
+
 The `/fs-triage` command does not accept arguments — it re-evaluates the issue
 using current content, comments, and any prior triage analysis.
 

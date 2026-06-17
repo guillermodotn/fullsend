@@ -196,7 +196,9 @@ jobs:
 
             issues)
               if [[ "${EVENT_ACTION}" == "opened" || "${EVENT_ACTION}" == "edited" ]]; then
-                STAGE="triage"
+                if is_event_actor_authorized "${ISSUE_AUTHOR_ASSOC}"; then
+                  STAGE="triage"
+                fi
               elif [[ "${EVENT_ACTION}" == "labeled" ]]; then
                 if [[ "${TRIGGERING_LABEL}" == "ready-to-code" ]]; then
                   STAGE="code"
