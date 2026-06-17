@@ -130,7 +130,7 @@ See [Customizing with AGENTS.md](../guides/user/customizing-with-agents-md.md) a
 This is the single place a user looks to discover what knobs an agent
 supports. Every agent doc includes this subsection for consistency — agents
 that accept no configuration vars state "None" in the section. The agent's
-system prompt (`agents/<role>.md`) references config vars wherever they are
+system prompt (`agents/<agent>.md`) references config vars wherever they are
 naturally needed in the instructions — no prescribed section structure.
 
 ### Using config vars at inference time
@@ -173,7 +173,7 @@ per-repo `.fullsend/`. This layering already applies to `.env` files and
 - **Collision-free by convention.** The `{AGENT}_` prefix scopes config vars
   to the agent that owns them.
 - **Agent system prompts stay flexible.** There is no required section
-  structure for how `agents/<role>.md` references config vars. Agent
+  structure for how `agents/<agent>.md` references config vars. Agent
   authors place references where they make sense in the prompt flow.
 - **Each new config var may require updates in several places:**
   1. Agent `.env` file (sandbox delivery)
