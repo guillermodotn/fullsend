@@ -243,9 +243,13 @@ jobs:
           SOURCE_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          BOT_LOGIN="fullsend-ai[bot]"
+          CODER_BOT_LOGIN="fullsend-ai-coder[bot]"
           MENTIONING_PRS="$(gh pr list --repo "${SOURCE_REPO}" --state open \
             --search "${ISSUE_NUMBER} in:title,body" \
-            --json number --jq '.[].number' 2>/dev/null || true)"
+            --json number,author \
+            --jq "[.[] | select(.author.login != \"${BOT_LOGIN}\" and .author.login != \"${CODER_BOT_LOGIN}\")] | .[].number" \
+            2>/dev/null || true)"
           if [[ -n "${MENTIONING_PRS}" ]]; then
             echo "::notice::Open PR(s) mentioning issue #${ISSUE_NUMBER} found — skipping code dispatch"
             echo "skipped=true" >> "${GITHUB_OUTPUT}"
