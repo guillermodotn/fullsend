@@ -153,7 +153,7 @@ jobs:
 
       - name: Validate PATH security
         run: |
-          docker run --rm fullsend-code:ci-smoke sh -c '
+          docker run --rm --entrypoint '' fullsend-code:ci-smoke sh -c '
             LAST=$(echo "$PATH" | tr ":" "\n" | tail -1)
             [ "$LAST" = "/sandbox/go/bin" ] || { echo "FAIL: /sandbox/go/bin not last (got $LAST)"; exit 1; }
             [ "$(which git)" = "/usr/bin/git" ] || { echo "FAIL: git shadowed ($(which git))"; exit 1; }
