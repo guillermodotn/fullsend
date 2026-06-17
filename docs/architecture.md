@@ -95,7 +95,7 @@ The harness draws its configuration from the adopting organization's **`.fullsen
   naming (e.g., `REVIEW_SEVERITY_THRESHOLD`), delivered via existing env var
   mechanisms (`.env` files, `runner_env`). Each agent documents its config
   vars in `docs/agents/<agent>.md`
-  ([ADR 0047](ADRs/0047-agent-configuration-env-var-convention.md)).
+  ([ADR 0049](ADRs/0049-agent-configuration-env-var-convention.md)).
 
 **Open questions:**
 

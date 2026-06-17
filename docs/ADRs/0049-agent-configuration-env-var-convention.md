@@ -1,5 +1,5 @@
 ---
-title: "47. Agent configuration environment variable convention"
+title: "49. Agent configuration environment variable convention"
 status: Accepted
 relates_to:
   - agent-architecture
@@ -11,7 +11,7 @@ topics:
   - conventions
 ---
 
-# 47. Agent configuration environment variable convention
+# 49. Agent configuration environment variable convention
 
 Date: 2026-06-16
 
