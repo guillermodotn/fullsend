@@ -54,15 +54,17 @@ Pass this URL as `--mint-url` when running `fullsend admin install`, or set the 
   | `roles/cloudfunctions.developer` | x | | | | | |
   | `roles/cloudfunctions.viewer` | | x | x | x | x | x |
   | `roles/run.admin` | x | x | x | x | x | |
-  | `roles/secretmanager.viewer` | | | | | | x |
+  | `roles/secretmanager.viewer` | | § | | | | x |
 
   \* `roles/resourcemanager.projectIamAdmin` and `roles/secretmanager.admin` are required for `mint deploy` only when using `--pem-dir` (first-time bootstrap). Standard deploys without `--pem-dir` do not need these roles.
 
   \*\* `roles/resourcemanager.projectIamAdmin` is required for `mint enroll` only in per-repo mode (`mint enroll owner/repo`). Org-scoped enrollment does not grant IAM bindings — use `inference provision` separately.
 
-  \*\*\* `roles/secretmanager.admin` is required for `mint add-role` when uploading a new PEM (`--pem` or browser mode). It is not required when using `--use-existing-pem-secret`.
+  \*\*\* `roles/secretmanager.admin` is required for `mint add-role` when uploading a new PEM (`--pem` or browser mode). When using `--use-existing-pem-secret`, only `roles/secretmanager.viewer` is required (see §).
 
   \*\*\*\* `roles/secretmanager.admin` is required for `mint remove-role` unless `--keep-pem` is passed (default deletes the PEM secret).
+
+  § `roles/secretmanager.viewer` is required for `mint add-role` when using `--use-existing-pem-secret` (checks that the PEM secret exists).
 
   `roles/owner` covers all of the above for users with broad access.
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -199,13 +200,25 @@ type mintSetupAddRoleConfig struct {
 
 func validateMintSetupRole(role string) (string, error) {
 	if role == "fix" || role == "code" {
-		return "", fmt.Errorf("role %q uses the coder app — add role \"coder\" instead", role)
+		return "", fmt.Errorf("role %q uses the coder app — use \"coder\" instead", role)
 	}
 	canonical := resolveRole(role)
 	if !mintcore.HasRole(canonical) {
 		return "", fmt.Errorf("unsupported role %q: must be one of %s", canonical, strings.Join(config.ValidRoles(), ", "))
 	}
 	return canonical, nil
+}
+
+var appSlugRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`)
+
+func validateAppSlug(slug string) error {
+	if slug == "" {
+		return fmt.Errorf("app slug cannot be empty")
+	}
+	if !appSlugRE.MatchString(slug) {
+		return fmt.Errorf("invalid app slug %q: must be lowercase letters, numbers, and hyphens", slug)
+	}
+	return nil
 }
 
 func parseMintAddRoleMode(slug, pemPath, org string, useExistingPEMSecret bool) (mintAddRoleMode, error) {
@@ -300,6 +313,11 @@ func runMintSetupAddRole(ctx context.Context, printer *ui.Printer, cfg mintSetup
 	printer.StepStart("Updating mint role configuration")
 	if err := provisioner.AddRoleToMint(ctx, cfg.role, strconv.Itoa(appID)); err != nil {
 		printer.StepFail("Failed to update mint env vars")
+		if cfg.mode != addRoleModeExistingSecret {
+			secretRole := mintcore.PemSecretRole(cfg.role)
+			return fmt.Errorf("registering role on mint: %w (PEM was already stored in secret fullsend-%s-app-pem; re-run with --use-existing-pem-secret to retry, or delete manually: gcloud secrets delete fullsend-%s-app-pem --project=%s)",
+				err, secretRole, secretRole, cfg.project)
+		}
 		return fmt.Errorf("registering role on mint: %w", err)
 	}
 	printer.StepDone("Role registered on mint")
@@ -314,6 +332,9 @@ func runMintSetupAddRole(ctx context.Context, printer *ui.Printer, cfg mintSetup
 }
 
 func resolveAddRoleFromSlugPEM(ctx context.Context, printer *ui.Printer, provisioner *gcf.Provisioner, cfg mintSetupAddRoleConfig) (int, error) {
+	if err := validateAppSlug(cfg.slug); err != nil {
+		return 0, err
+	}
 	printer.StepStart(fmt.Sprintf("Loading PEM and verifying app %q", cfg.slug))
 	pemData, err := os.ReadFile(cfg.pemPath)
 	if err != nil {
@@ -354,6 +375,9 @@ func resolveAddRoleFromSlugPEM(ctx context.Context, printer *ui.Printer, provisi
 }
 
 func resolveAddRoleFromExistingSecret(ctx context.Context, printer *ui.Printer, provisioner *gcf.Provisioner, cfg mintSetupAddRoleConfig) (int, error) {
+	if err := validateAppSlug(cfg.slug); err != nil {
+		return 0, err
+	}
 	printer.StepStart(fmt.Sprintf("Looking up app ID for %q", cfg.slug))
 	appID, err := lookupAppID(ctx, cfg.slug)
 	if err != nil {
@@ -374,6 +398,7 @@ func resolveAddRoleFromExistingSecret(ctx context.Context, printer *ui.Printer, 
 			mintcore.PemSecretRole(cfg.role))
 	}
 	printer.StepDone("PEM secret present")
+	printer.StepWarn(fmt.Sprintf("Skipping PEM verification — ensure fullsend-%s-app-pem matches app %q", mintcore.PemSecretRole(cfg.role), cfg.slug))
 	return appID, nil
 }
 

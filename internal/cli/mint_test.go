@@ -986,10 +986,20 @@ func TestValidateMintSetupRole(t *testing.T) {
 	_, err = validateMintSetupRole("fix")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "coder")
+	assert.NotContains(t, err.Error(), "add role")
 
 	_, err = validateMintSetupRole("unknown")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported role")
+}
+
+func TestValidateAppSlug(t *testing.T) {
+	t.Parallel()
+	require.NoError(t, validateAppSlug("fullsend-ai-review"))
+	require.NoError(t, validateAppSlug("my-app"))
+	err := validateAppSlug("Bad_Slug")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid app slug")
 }
 
 func TestParseMintAddRoleMode(t *testing.T) {
@@ -1623,6 +1633,60 @@ func TestRunMintSetupAddRole_AddRoleFails(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "registering role on mint")
+	assert.NotContains(t, err.Error(), "use-existing-pem-secret")
+}
+
+func TestRunMintSetupAddRole_AddRoleFailsAfterPEMStored(t *testing.T) {
+	testPEM := generateTestPEM(t)
+	pemPath := filepath.Join(t.TempDir(), "review.pem")
+	require.NoError(t, os.WriteFile(pemPath, testPEM, 0o600))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/apps/fullsend-ai-review":
+			fmt.Fprintln(w, `{"id": 88888}`)
+		case "/app":
+			fmt.Fprintln(w, `{"id": 88888}`)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	orig := githubAPIBaseURL
+	githubAPIBaseURL = srv.URL
+	defer func() { githubAPIBaseURL = orig }()
+
+	withMintGCFClient(t, gcf.NewFakeGCFClient(
+		gcf.WithFakeFunctionInfo(&gcf.FunctionInfo{
+			URI:     "https://mint.example.com",
+			EnvVars: map[string]string{"ROLE_APP_IDS": `{"coder":"100"}`},
+		}),
+		gcf.WithFakeTrafficEnvVars(map[string]string{
+			"ROLE_APP_IDS": `{"coder":"100"}`,
+		}),
+		gcf.WithFakeSecrets(map[string]bool{
+			"fullsend-review-app-pem": false,
+		}),
+		gcf.WithFakeErrors(map[string]error{
+			"UpdateServiceEnvVars": fmt.Errorf("permission denied"),
+		}),
+	))
+
+	printer := ui.New(&strings.Builder{})
+	err := runMintSetupAddRole(context.Background(), printer, mintSetupAddRoleConfig{
+		role:    "review",
+		project: "my-project-id",
+		region:  "us-central1",
+		slug:    "fullsend-ai-review",
+		pemPath: pemPath,
+		mode:    addRoleModeSlugPEM,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "registering role on mint")
+	assert.Contains(t, err.Error(), "use-existing-pem-secret")
+	assert.Contains(t, err.Error(), "gcloud secrets delete")
 }
 
 func TestRunMintSetupRemoveRole_RemoveFails(t *testing.T) {
