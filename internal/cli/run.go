@@ -660,35 +660,13 @@ func runAgent(ctx context.Context, agentName, fullsendDir, outputBase, targetRep
 		}
 	}
 
-	// 8a-1. Inject a minimal CLAUDE.md pointer when running Claude Code
+	// 8a.1. Inject a minimal CLAUDE.md pointer when running Claude Code
 	// against repos that have AGENTS.md but no CLAUDE.md. Claude Code
 	// auto-loads CLAUDE.md into its system context but does not read
 	// AGENTS.md by default. Without this bridge file, agents are
 	// effectively context-blind in repos that only have AGENTS.md.
 	if rt.Name() == "claude" && hasAgentsMD(hostRepositoryDir) && !hasClaudeMD(hostRepositoryDir) {
-		claudeMDContent := "Project rules and instructions live in [AGENTS.md](AGENTS.md). Read that file now — it is the single source of truth for all agent-facing guidance in this repo.\n"
-		tmpClaudeMD, err := os.CreateTemp("", "fullsend-claude-md-*")
-		if err != nil {
-			printer.StepWarn("Could not create temp CLAUDE.md: " + err.Error())
-		} else {
-			if _, err := tmpClaudeMD.WriteString(claudeMDContent); err != nil {
-				tmpClaudeMD.Close()
-				os.Remove(tmpClaudeMD.Name())
-				printer.StepWarn("Could not write temp CLAUDE.md: " + err.Error())
-			} else {
-				tmpClaudeMD.Close()
-				if err := sandbox.UploadFile(sandboxName, tmpClaudeMD.Name(), remoteRepositoryDir+"/CLAUDE.md"); err != nil {
-					printer.StepWarn("Could not inject CLAUDE.md: " + err.Error())
-				} else {
-					excludeCmd := fmt.Sprintf("echo 'CLAUDE.md' >> %s/.git/info/exclude", remoteRepositoryDir)
-					if _, _, _, err := sandbox.Exec(sandboxName, excludeCmd, 5*time.Second); err != nil {
-						printer.StepWarn("Could not add CLAUDE.md to git exclude: " + err.Error())
-					}
-					printer.StepDone("Injected CLAUDE.md pointer to AGENTS.md (target repo has none)")
-				}
-				os.Remove(tmpClaudeMD.Name())
-			}
-		}
+		injectClaudeMDPointer(sandboxName, remoteRepositoryDir, printer)
 	}
 
 	// 8a-2. Exclude agent working directories from git tracking.
@@ -1627,6 +1605,25 @@ func hasClaudeMD(repoDir string) bool {
 		}
 	}
 	return false
+}
+
+// claudeMDPointerContent is the content injected into CLAUDE.md when a repo
+// has AGENTS.md but no CLAUDE.md.
+const claudeMDPointerContent = "Project rules and instructions live in [AGENTS.md](AGENTS.md). Read that file now — it is the single source of truth for all agent-facing guidance in this repo.\n"
+
+// injectClaudeMDPointer writes a minimal CLAUDE.md bridge file directly
+// inside the sandbox and excludes it from git tracking.
+func injectClaudeMDPointer(sandboxName, remoteRepositoryDir string, printer *ui.Printer) {
+	writeCmd := fmt.Sprintf("printf '%%s' %q > %s/CLAUDE.md", claudeMDPointerContent, remoteRepositoryDir)
+	if _, _, _, err := sandbox.Exec(sandboxName, writeCmd, 5*time.Second); err != nil {
+		printer.StepWarn("Could not inject CLAUDE.md: " + err.Error())
+		return
+	}
+	excludeCmd := fmt.Sprintf("echo 'CLAUDE.md' >> %s/.git/info/exclude", remoteRepositoryDir)
+	if _, _, _, err := sandbox.Exec(sandboxName, excludeCmd, 5*time.Second); err != nil {
+		printer.StepWarn("Could not add CLAUDE.md to git exclude: " + err.Error())
+	}
+	printer.StepDone("Injected CLAUDE.md pointer to AGENTS.md (target repo has none)")
 }
 
 // scanRepoContextFiles walks the target repo directory for known context

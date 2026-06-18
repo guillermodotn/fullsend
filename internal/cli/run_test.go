@@ -552,6 +552,13 @@ func TestHasClaudeMD_OtherFiles(t *testing.T) {
 	assert.False(t, hasClaudeMD(dir))
 }
 
+func TestClaudeMDPointerContent(t *testing.T) {
+	// Verify the injected CLAUDE.md content references AGENTS.md and
+	// ends with a newline (so the file is well-formed).
+	assert.Contains(t, claudeMDPointerContent, "AGENTS.md")
+	assert.True(t, strings.HasSuffix(claudeMDPointerContent, "\n"), "content should end with newline")
+}
+
 func TestEnvToList_Sorted(t *testing.T) {
 	env := map[string]string{
 		"Z_VAR": "z",
