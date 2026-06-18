@@ -27,9 +27,10 @@ Requires OWNER, MEMBER, or COLLABORATOR repository association.
 The `/fs-triage` command does not accept arguments — it re-evaluates the issue
 using current content, comments, and any prior triage analysis.
 
-Triage also runs automatically when a new issue is opened, when an issue is
-edited, and when someone comments on an issue labeled `needs-info` (to
-re-evaluate after the reporter provides clarification).
+Triage also runs automatically when a new issue is opened or edited by a
+repository owner, member, or collaborator, and when someone comments on an
+issue labeled `needs-info` (to re-evaluate after the reporter provides
+clarification).
 
 ## Control labels
 
