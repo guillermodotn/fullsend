@@ -826,9 +826,8 @@ func TestFindingsToReviewComments(t *testing.T) {
 		{File: "c.go", Line: 20, Severity: "critical", Category: "security", Description: "Desc C", Remediation: "Fix it"},
 	}
 
-	comments, fileFiltered, lineFiltered, infoFiltered, fileLevelFallback := findingsToReviewComments(findings, nil)
+	comments, fileFiltered, fileLevelFallback := findingsToReviewComments(findings, nil)
 	assert.Equal(t, 0, fileFiltered)
-	assert.Equal(t, 0, lineFiltered)
 	assert.Equal(t, 0, fileLevelFallback)
 	require.Len(t, comments, 2)
 
@@ -841,11 +840,6 @@ func TestFindingsToReviewComments(t *testing.T) {
 	assert.Equal(t, 20, comments[1].Line)
 	assert.Contains(t, comments[1].Body, "critical")
 	assert.Contains(t, comments[1].Body, "Fix it")
-
-	// The "info" finding (b.go) has no line so it's skipped for
-	// location reasons, not info-filtering. Verify info filter
-	// count is 0 here since the info finding lacked a line number.
-	assert.Equal(t, 0, infoFiltered)
 }
 
 func TestFindingsToReviewComments_FiltersByDiffHunks(t *testing.T) {
@@ -860,16 +854,18 @@ func TestFindingsToReviewComments_FiltersByDiffHunks(t *testing.T) {
 		"also-changed.go": {{1, 10}},
 	}
 
-	comments, fileFiltered, lineFiltered, infoFiltered, fileLevelFallback := findingsToReviewComments(findings, diffHunks)
+	comments, fileFiltered, fileLevelFallback := findingsToReviewComments(findings, diffHunks)
 	assert.Equal(t, 1, fileFiltered)
-	assert.Equal(t, 1, lineFiltered)
-	assert.Equal(t, 0, infoFiltered)
-	assert.Equal(t, 0, fileLevelFallback)
-	require.Len(t, comments, 2)
+	assert.Equal(t, 1, fileLevelFallback, "low-severity out-of-hunk finding should fall back to file-level")
+	require.Len(t, comments, 3)
 	assert.Equal(t, "changed.go", comments[0].Path)
 	assert.Equal(t, 10, comments[0].Line)
-	assert.Equal(t, "also-changed.go", comments[1].Path)
-	assert.Equal(t, 3, comments[1].Line)
+	// The out-of-hunk low finding now falls back to file-level.
+	assert.Equal(t, "changed.go", comments[1].Path)
+	assert.Equal(t, 0, comments[1].Line)
+	assert.Equal(t, "file", comments[1].SubjectType)
+	assert.Equal(t, "also-changed.go", comments[2].Path)
+	assert.Equal(t, 3, comments[2].Line)
 }
 
 func TestFindingsToReviewComments_EmptyPatchSkipsLineFiltering(t *testing.T) {
@@ -885,19 +881,21 @@ func TestFindingsToReviewComments_EmptyPatchSkipsLineFiltering(t *testing.T) {
 		"changed.go": {{5, 15}},
 	}
 
-	comments, fileFiltered, lineFiltered, infoFiltered, fileLevelFallback := findingsToReviewComments(findings, diffHunks)
+	comments, fileFiltered, fileLevelFallback := findingsToReviewComments(findings, diffHunks)
 	assert.Equal(t, 0, fileFiltered)
-	assert.Equal(t, 0, lineFiltered, "no low-severity out-of-hunk findings in this test")
-	assert.Equal(t, 1, infoFiltered, "info-severity finding on changed.go should be filtered")
-	assert.Equal(t, 0, fileLevelFallback)
-	require.Len(t, comments, 3)
+	assert.Equal(t, 1, fileLevelFallback, "out-of-hunk info finding on changed.go should fall back to file-level")
+	require.Len(t, comments, 4)
 	assert.Equal(t, "binary.png", comments[0].Path)
 	assert.Equal(t, "large.go", comments[1].Path)
 	assert.Equal(t, "changed.go", comments[2].Path)
 	assert.Equal(t, 10, comments[2].Line)
+	// The info finding outside the hunk now falls back to file-level.
+	assert.Equal(t, "changed.go", comments[3].Path)
+	assert.Equal(t, 0, comments[3].Line)
+	assert.Equal(t, "file", comments[3].SubjectType)
 }
 
-func TestFindingsToReviewComments_InfoSeverityFiltered(t *testing.T) {
+func TestFindingsToReviewComments_AllSeveritiesPassThrough(t *testing.T) {
 	findings := []ReviewFinding{
 		{File: "a.go", Line: 10, Severity: "info", Category: "docs", Description: "Info finding with location"},
 		{File: "a.go", Line: 15, Severity: "Info", Category: "docs", Description: "Info finding case insensitive"},
@@ -905,77 +903,46 @@ func TestFindingsToReviewComments_InfoSeverityFiltered(t *testing.T) {
 		{File: "a.go", Line: 25, Severity: "medium", Category: "bug", Description: "Medium finding"},
 	}
 
-	comments, _, _, infoFiltered, _ := findingsToReviewComments(findings, nil)
-	assert.Equal(t, 2, infoFiltered, "both info findings should be filtered")
-	require.Len(t, comments, 2, "only low and medium findings should pass through")
-	assert.Contains(t, comments[0].Body, "Low finding")
-	assert.Contains(t, comments[1].Body, "Medium finding")
+	comments, fileFiltered, fileLevelFallback := findingsToReviewComments(findings, nil)
+	assert.Equal(t, 0, fileFiltered)
+	assert.Equal(t, 0, fileLevelFallback)
+	require.Len(t, comments, 4, "all findings should pass through regardless of severity")
+	assert.Contains(t, comments[0].Body, "Info finding with location")
+	assert.Contains(t, comments[1].Body, "Info finding case insensitive")
+	assert.Contains(t, comments[2].Body, "Low finding")
+	assert.Contains(t, comments[3].Body, "Medium finding")
 }
 
-func TestFindingsToReviewComments_MediumPlusFallbackToFileLevel(t *testing.T) {
+func TestFindingsToReviewComments_AllSeveritiesFallbackToFileLevel(t *testing.T) {
 	findings := []ReviewFinding{
 		{File: "changed.go", Line: 10, Severity: "high", Category: "bug", Description: "In hunk"},
 		{File: "changed.go", Line: 50, Severity: "medium", Category: "logic-error", Description: "Medium outside hunk"},
 		{File: "changed.go", Line: 60, Severity: "critical", Category: "security", Description: "Critical outside hunk"},
 		{File: "changed.go", Line: 70, Severity: "low", Category: "style", Description: "Low outside hunk"},
+		{File: "changed.go", Line: 75, Severity: "info", Category: "docs", Description: "Info outside hunk"},
 		{File: "changed.go", Line: 80, Severity: "High", Category: "bug", Description: "High outside hunk case insensitive"},
 	}
 	diffHunks := map[string][][2]int{
 		"changed.go": {{5, 15}},
 	}
 
-	comments, fileFiltered, lineFiltered, infoFiltered, fileLevelFallback := findingsToReviewComments(findings, diffHunks)
+	comments, fileFiltered, fileLevelFallback := findingsToReviewComments(findings, diffHunks)
 	assert.Equal(t, 0, fileFiltered)
-	assert.Equal(t, 1, lineFiltered, "only the low-severity out-of-hunk finding should be line-filtered")
-	assert.Equal(t, 0, infoFiltered)
-	assert.Equal(t, 3, fileLevelFallback, "medium, critical, and high findings outside hunk should fall back to file-level")
-	require.Len(t, comments, 4)
+	assert.Equal(t, 5, fileLevelFallback, "all out-of-hunk findings should fall back to file-level")
+	require.Len(t, comments, 6)
 
 	// First comment: in-hunk high finding with line number.
 	assert.Equal(t, "changed.go", comments[0].Path)
 	assert.Equal(t, 10, comments[0].Line)
 	assert.Empty(t, comments[0].SubjectType)
 
-	// Remaining: file-level fallback comments for medium+ findings.
-	assert.Equal(t, "changed.go", comments[1].Path)
-	assert.Equal(t, 0, comments[1].Line, "file-level comment should have Line=0")
-	assert.Equal(t, "file", comments[1].SubjectType)
-	assert.Contains(t, comments[1].Body, "Medium outside hunk")
-
-	assert.Equal(t, "changed.go", comments[2].Path)
-	assert.Equal(t, 0, comments[2].Line)
-	assert.Equal(t, "file", comments[2].SubjectType)
-	assert.Contains(t, comments[2].Body, "Critical outside hunk")
-
-	assert.Equal(t, "changed.go", comments[3].Path)
-	assert.Equal(t, 0, comments[3].Line)
-	assert.Equal(t, "file", comments[3].SubjectType)
-	assert.Contains(t, comments[3].Body, "High outside hunk case insensitive")
-}
-
-func TestIsMediumPlusSeverity(t *testing.T) {
-	tests := []struct {
-		severity string
-		want     bool
-	}{
-		{"critical", true},
-		{"Critical", true},
-		{"CRITICAL", true},
-		{"high", true},
-		{"High", true},
-		{"medium", true},
-		{"Medium", true},
-		{"low", false},
-		{"Low", false},
-		{"info", false},
-		{"Info", false},
-		{"", false},
-		{"unknown", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.severity, func(t *testing.T) {
-			assert.Equal(t, tt.want, isMediumPlusSeverity(tt.severity))
-		})
+	// Remaining: file-level fallback comments for all out-of-hunk findings.
+	for i, desc := range []string{"Medium outside hunk", "Critical outside hunk", "Low outside hunk", "Info outside hunk", "High outside hunk case insensitive"} {
+		idx := i + 1
+		assert.Equal(t, "changed.go", comments[idx].Path)
+		assert.Equal(t, 0, comments[idx].Line, "file-level comment should have Line=0")
+		assert.Equal(t, "file", comments[idx].SubjectType)
+		assert.Contains(t, comments[idx].Body, desc)
 	}
 }
 
@@ -1001,11 +968,16 @@ func TestSubmitFormalReview_FiltersByPRFileDiffs(t *testing.T) {
 	err := submitFormalReview(context.Background(), fc, "acme", "repo", 1, "request-changes", "", "", findings, false, printer)
 	require.NoError(t, err)
 	require.Len(t, fc.CreatedReviews, 1)
-	require.Len(t, fc.CreatedReviews[0].Comments, 2, "file-filtered and line-filtered findings should be omitted")
+	require.Len(t, fc.CreatedReviews[0].Comments, 3, "file-not-in-diff finding omitted; out-of-hunk finding falls back to file-level")
 	assert.Equal(t, "changed.go", fc.CreatedReviews[0].Comments[0].Path)
-	assert.Equal(t, "also-changed.go", fc.CreatedReviews[0].Comments[1].Path)
+	assert.Equal(t, 10, fc.CreatedReviews[0].Comments[0].Line)
+	// Out-of-hunk low finding falls back to file-level comment.
+	assert.Equal(t, "changed.go", fc.CreatedReviews[0].Comments[1].Path)
+	assert.Equal(t, 0, fc.CreatedReviews[0].Comments[1].Line)
+	assert.Equal(t, "file", fc.CreatedReviews[0].Comments[1].SubjectType)
+	assert.Equal(t, "also-changed.go", fc.CreatedReviews[0].Comments[2].Path)
 	assert.Contains(t, out.String(), "1 inline comment(s) omitted (file not in PR diff) — findings still count toward verdict")
-	assert.Contains(t, out.String(), "1 inline comment(s) omitted (line not in any diff hunk) — findings still count toward verdict")
+	assert.Contains(t, out.String(), "1 finding(s) posted as file-level comment(s) (line outside diff hunk)")
 }
 
 func TestSubmitFormalReview_ListPRFileDiffsErrorFallsBack(t *testing.T) {
