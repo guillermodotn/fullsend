@@ -135,15 +135,12 @@ The `stage` input to `dispatch.yml` becomes optional. When provided
 
 - Adding a new stage (command or event trigger) requires only a `case` branch
   in `dispatch.yml` and a new agent workflow file. No enrolled repo changes.
-- Enrolled repos gain per-role concurrency groups with `cancel-in-progress: true`
-  on each stage (triage, code, review, fix, retro, prioritize). Groups are keyed
-  by `{repo}-{issue|pr}` per stage so roles operate independently — a new review
-  dispatch cancels an in-flight review but does not cancel triage or code on the
-  same issue. Per-org: thin caller workflows (`review.yml`, etc.); per-repo:
-  `reusable-dispatch.yml` stage jobs. Reusable stage workflows omit concurrency
-  (same group on a workflow_call parent and child cancels the parent). The
-  per-org shim retains a single queue group (`cancel-in-progress: false`);
-  the per-repo shim has no monolithic group (#2452).
+- Enrolled repos gain a single concurrency group
+  (`fullsend-${{ github.event.pull_request.number || github.event.issue.number }}`).
+  This is a behavioral change from the status quo, where stages run
+  independently: a new dispatch now cancels any in-progress run for the
+  same issue/PR. In practice, only one agent should run per issue/PR at a
+  time, and the latest event takes priority.
 - Events that don't match any stage still trigger a `workflow_call` to
   `dispatch.yml`, which exits early. Cost: one runner spin-up (~20s). The
   `if:` filter on the dispatch job eliminates bot comments, the
@@ -165,3 +162,8 @@ The `stage` input to `dispatch.yml` becomes optional. When provided
   the same routing script. Per-org shims could also adopt
   `reusable-fullsend.yml` directly, eliminating `dispatch.yml` as a
   routing layer entirely — see ADR 0033 Open Questions.
+
+## Implementation note (#981)
+
+Per-role dispatch concurrency is configured in repository workflows; the routing
+model in this ADR is unchanged.

@@ -61,7 +61,7 @@ type stageConcurrencyExpectation struct {
 	groupMust   []string
 }
 
-var reusableStageConcurrencyExpectations = map[string]stageConcurrencyExpectation{
+var thinCallerConcurrencyExpectations = map[string]stageConcurrencyExpectation{
 	"triage": {
 		groupPrefix: "fullsend-triage-",
 		groupMust:   []string{"inputs.source_repo", "issue.number"},
@@ -84,6 +84,33 @@ var reusableStageConcurrencyExpectations = map[string]stageConcurrencyExpectatio
 	},
 	"prioritize": {
 		groupPrefix: "fullsend-prioritize-",
+		groupMust:   []string{"inputs.source_repo", "issue.number"},
+	},
+}
+
+var reusableAgentConcurrencyExpectations = map[string]stageConcurrencyExpectation{
+	"triage": {
+		groupPrefix: "fullsend-triage-agent-",
+		groupMust:   []string{"inputs.source_repo", "issue.number"},
+	},
+	"code": {
+		groupPrefix: "fullsend-code-agent-",
+		groupMust:   []string{"inputs.source_repo", "issue.number"},
+	},
+	"review": {
+		groupPrefix: "fullsend-review-agent-",
+		groupMust:   []string{"inputs.source_repo", "pull_request.number", "issue.number"},
+	},
+	"fix": {
+		groupPrefix: "fullsend-fix-agent-",
+		groupMust:   []string{"inputs.source_repo", "pull_request.number", "issue.number", "inputs.pr_number"},
+	},
+	"retro": {
+		groupPrefix: "fullsend-retro-agent-",
+		groupMust:   []string{"inputs.source_repo", "pull_request.number", "issue.number"},
+	},
+	"prioritize": {
+		groupPrefix: "fullsend-prioritize-agent-",
 		groupMust:   []string{"inputs.source_repo", "issue.number"},
 	},
 }
@@ -323,13 +350,11 @@ func TestReusableDispatchStageConcurrency(t *testing.T) {
 	}
 }
 
-// TestReusableWorkflowsNoWorkflowConcurrency ensures reusable stage workflows
-// do not declare workflow-level concurrency. Callers (reusable-dispatch stage
-// jobs or per-org thin callers) own the per-role group; duplicating the same
-// group on a workflow_call child cancels the parent immediately (#981).
-func TestReusableWorkflowsNoWorkflowConcurrency(t *testing.T) {
-	stages := []string{"triage", "code", "review", "fix", "retro", "prioritize"}
-	for _, stage := range stages {
+// TestReusableAgentWorkflowConcurrency validates agent-scoped cancel-in-progress
+// groups on reusable stage workflows. Groups use a distinct -agent- prefix so
+// they do not collide with dispatch/thin-caller groups on workflow_call parents.
+func TestReusableAgentWorkflowConcurrency(t *testing.T) {
+	for stage, expect := range reusableAgentConcurrencyExpectations {
 		t.Run(stage, func(t *testing.T) {
 			path := filepath.Join("..", "..", ".github", "workflows", fmt.Sprintf("reusable-%s.yml", stage))
 			content, err := os.ReadFile(path)
@@ -337,8 +362,20 @@ func TestReusableWorkflowsNoWorkflowConcurrency(t *testing.T) {
 
 			var wf reusableStageWorkflow
 			require.NoError(t, yaml.Unmarshal(content, &wf))
-			assert.Nil(t, wf.Concurrency,
-				"reusable-%s.yml must not declare workflow-level concurrency (callers own the group)", stage)
+			require.NotNil(t, wf.Concurrency, "reusable-%s.yml should declare workflow-level concurrency", stage)
+			assert.Contains(t, wf.Concurrency.Group, expect.groupPrefix)
+			for _, fragment := range expect.groupMust {
+				assert.Contains(t, wf.Concurrency.Group, fragment,
+					"reusable-%s.yml concurrency group should reference %q", stage, fragment)
+			}
+			assert.True(t, wf.Concurrency.CancelInProgress,
+				"reusable-%s.yml should cancel in-progress runs", stage)
+
+			callerExpect := thinCallerConcurrencyExpectations[stage]
+			assert.NotEqual(t, callerExpect.groupPrefix, expect.groupPrefix,
+				"reusable-%s.yml must use a distinct agent-scoped group prefix", stage)
+			assert.Contains(t, wf.Concurrency.Group, "-agent-",
+				"reusable-%s.yml group must be agent-scoped, not reuse dispatch/thin-caller prefix", stage)
 		})
 	}
 }
@@ -346,7 +383,7 @@ func TestReusableWorkflowsNoWorkflowConcurrency(t *testing.T) {
 // TestThinCallerStageConcurrency validates per-role cancel-in-progress groups on
 // per-org thin caller workflows in the scaffold (#981, ADR 0033).
 func TestThinCallerStageConcurrency(t *testing.T) {
-	for stage, expect := range reusableStageConcurrencyExpectations {
+	for stage, expect := range thinCallerConcurrencyExpectations {
 		t.Run(stage, func(t *testing.T) {
 			path := fmt.Sprintf(".github/workflows/%s.yml", stage)
 			content := loadRenderedScaffoldCaller(path)(t)
