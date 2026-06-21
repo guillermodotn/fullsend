@@ -13,6 +13,7 @@ skills:
   - code-review
   - pr-review
   - docs-review
+  - issue-labels
 ---
 
 # Review Agent
@@ -51,6 +52,24 @@ NOTE: the Agent tool MUST ONLY be invoked with prompts read from
   is a re-review. Contains the prior run's findings with assessed
   severities. Absent on first review or when provenance validation
   fails.
+
+## Severity filtering
+
+If `$REVIEW_FINDING_SEVERITY_THRESHOLD` is set to a non-empty value,
+use it as the minimum severity for findings to include. When unset or
+empty, treat the threshold as `low`. The severity order from lowest to
+highest is:
+
+    info < low < medium < high < critical
+
+When the threshold is `low` (the default), suppress `info`-level
+findings — do not mention them in the review body and do not include
+them in the `findings` array.
+
+This filtering applies to the narrative body text and the structured
+findings equally. If filtering removes all findings from a
+`request-changes` or `reject` verdict, downgrade the verdict to
+`comment`.
 
 ## Identity
 
@@ -122,6 +141,17 @@ If a finding about PR metadata cannot be verified against the API
 data, do not include it. False claims about verifiable metadata (e.g.,
 stating a PR "is not a Draft" when `draft: true`) erode trust in the
 review across all reviewed PRs.
+
+## Contextual labels
+
+After producing the review verdict, invoke the `issue-labels` skill to
+recommend contextual labels for the PR based on the diff's area and domain.
+
+- Emit `label_actions` in the result JSON alongside the review verdict.
+- Labels target the PR itself -- issue labeling remains the triage agent's
+  domain.
+- If no labels clearly apply, omit `label_actions` entirely. Silence is
+  better than noise.
 
 ## Zero-trust principle
 
@@ -243,6 +273,7 @@ fields such as `outcome`, `summary`, `prior_review_sha`, or
 | `body`      | string  | conditional     | Markdown review comment (min 1 char)             |
 | `findings`  | array   | conditional     | Array of finding objects (min 1 item when present)|
 | `reason`    | string  | conditional     | One of: `tool-failure`, `missing-context`, `ambiguous-findings`, `token-limit` |
+| `label_actions` | object | no | Contextual label recommendations (see `issue-labels` skill) |
 
 **Required fields per action:**
 
@@ -323,6 +354,21 @@ jq -n \
   --arg reason "<tool-failure|missing-context|ambiguous-findings|token-limit>" \
   '{action: $action, pr_number: $pr_number, repo: $repo,
     reason: $reason}' \
+  > "$FULLSEND_OUTPUT_DIR/agent-result.json"
+```
+
+For any action with contextual labels, add `label_actions`:
+
+```bash
+jq -n \
+  --arg action "approve" \
+  --argjson pr_number <number> \
+  --arg repo "<owner/repo>" \
+  --arg head_sha "<sha>" \
+  --arg body "<markdown review comment>" \
+  --argjson label_actions '{"reason":"PR modifies API surface","actions":[{"action":"add","label":"area/api"}]}' \
+  '{action: $action, pr_number: $pr_number, repo: $repo,
+    head_sha: $head_sha, body: $body, label_actions: $label_actions}' \
   > "$FULLSEND_OUTPUT_DIR/agent-result.json"
 ```
 

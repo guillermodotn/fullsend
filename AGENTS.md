@@ -10,7 +10,7 @@ Fullsend is a platform for fully autonomous agentic development for GitHub-hoste
 - The security threat model (threat priority: external injection > insider > drift > supply chain) should inform all other documents.
 - Keep core problem documents organization-agnostic. Organization-specific details belong in `docs/problems/applied/<org-name>/`.
 - The target audience for problem documents is any contributor community considering autonomous agents — keep language accessible and avoid presuming solutions.
-- Always run `make lint` before submitting changes and fix any failures.
+- Always stage your changes before running `make lint` and fix any failures. Pre-commit only checks staged files — without staging first, it stashes your work and finds nothing to lint.
 - You **must** read and follow [COMMITS.md](COMMITS.md) when writing or reviewing commit messages. Getting the prefix right is not optional — GoReleaser uses it to build release notes.
 - This repository requires a [Developer Certificate of Origin (DCO)](https://developercertificate.org/). Human-proposed commits **must** be signed off: use `git commit -s` (or add `Signed-off-by: Your Name <email>` as a trailer). Human-driven agent sessions (e.g., using Claude Code locally) should also sign off — the human directing the session is the one certifying the DCO. **Autonomous agent commits are exempt** and must never supply the DCO with `-s` or with `Signed-off-by`. These agents commit using the GitHub App's bot identity, which the [Probot DCO app](https://github.com/apps/dco) auto-skips.
 - Never commit secrets (tokens, API keys, PEM keys, gcloud credentials) or sensitive data (GCP project names, service account identifiers, Model Armor template names, internal hostnames). Use environment variables with no defaults for sensitive values.
@@ -46,6 +46,34 @@ The e2e tests require GitHub credentials. There are three ways to provide them:
 - **`E2E_GITHUB_TOTP_SECRET` env var:** Optional. The TOTP secret (base32) for the test account's 2FA. Required only when the test account has 2FA enabled — used during session export and sudo confirmation.
 
 If only `E2E_GITHUB_USERNAME` and a password source are available, `make e2e-test` will automatically generate a session file before running tests. See `make help` for all available targets.
+
+## Shell scripting
+
+### `gh api --paginate` and jq
+
+`gh api --paginate` applies the `--jq` expression **independently to each page** of results, not to the combined output. This is a documented `gh` CLI behavior and a common source of bugs.
+
+**Do not** use aggregating jq filters directly in `--jq` with `--paginate`:
+
+```bash
+# WRONG — `length` runs per-page; produces one number per page, not a total
+count=$(gh api --paginate /repos/{owner}/{repo}/issues/comments --jq 'length')
+```
+
+**Do** collect all pages first, then pipe to a separate `jq -s` (slurp) call. `jq -s` slurps the input into an array; use `add` to flatten before aggregating:
+
+```bash
+# CORRECT — slurp all pages, flatten with add, then aggregate
+count=$(gh api --paginate /repos/{owner}/{repo}/issues/comments | jq -s 'add | length')
+```
+
+Without `--jq`, `gh api --paginate` merges all page arrays into a single flat JSON array before writing to stdout. `jq -s` then wraps that into an array-of-one; `add` unwraps it back to the flat array, and the aggregating filter runs once over all items. This pattern is defensive — it works correctly whether the upstream emits one merged array or (as when `--jq` is present) one array per page.
+
+This applies to any aggregating filter: `length`, `sort_by`, `group_by`, `add`, `min_by`, `max_by`, etc. If the filter only selects or transforms individual items (e.g., `.[] | .id`), per-page application is fine — but pipe the result through a final `jq -s` step before any cross-page aggregation.
+
+**When reviewing shell scripts:** Flag `--paginate --jq '... | length'` (or any other aggregating filter in `--jq`) as a medium-severity finding. The fix is always to move the aggregation to a separate `| jq -s 'add | ...'` pipe.
+
+**Alternative — `--slurp` flag:** When no inline `--jq` transform is needed, `gh api --paginate --slurp` combines pages into a single array directly. However, `--slurp` is mutually exclusive with `--jq` (errors with `"the --slurp option is not supported with --jq or --template"`), so the `| jq -s 'add | ...'` pipe pattern is required whenever you also need per-item filtering.
 
 ## Forge abstraction
 
