@@ -1856,7 +1856,7 @@ func buildLayerStack(
 		layers.NewSecretsLayer(org, client, agentCreds, printer).WithOIDCMode(),
 		layers.NewInferenceLayer(org, client, inferenceProvider, printer),
 		dispatchLayer,
-		layers.NewEnrollmentLayer(org, client, enabledRepos, disabledRepos, printer),
+		newEnrollmentLayer(org, client, enabledRepos, disabledRepos, printer, direct),
 	)
 }
 
@@ -1873,6 +1873,14 @@ func workflowsLayer(ctx context.Context, org string, client forge.Client, printe
 		if id, err := client.GetAuthenticatedUserIdentity(ctx); err == nil {
 			layer = layer.WithSignOff(id.Name, id.Email)
 		}
+	}
+	return layer
+}
+
+func newEnrollmentLayer(org string, client forge.Client, enabledRepos, disabledRepos []string, printer *ui.Printer, direct bool) *layers.EnrollmentLayer {
+	layer := layers.NewEnrollmentLayer(org, client, enabledRepos, disabledRepos, printer)
+	if !direct {
+		layer = layer.WithScaffoldPending()
 	}
 	return layer
 }
