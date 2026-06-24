@@ -99,6 +99,12 @@ jobs:
               echo "relevant=true" >> "$GITHUB_OUTPUT"
               exit 0
             }
+            FILE_COUNT=$(echo "$FILES" | wc -l)
+            if [ "$FILE_COUNT" -ge 300 ]; then
+              echo "::warning::Compare API returned $FILE_COUNT files (possible truncation at 300) — running e2e tests as a precaution"
+              echo "relevant=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           else
             FILES=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename') || {
               echo "::warning::Failed to fetch PR files — running e2e tests as a precaution"
