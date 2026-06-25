@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   debounce:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions: {}
     steps:
       - run: sleep 60
